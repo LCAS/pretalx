@@ -10,7 +10,7 @@ class SchedulePhrases(Phrases, app="schedule"):
 
     # Translators: Ideally a neutral term that will work for workshop, talks and special
     # formats. Plural, used in headings.
-    sessions = _("Sessions")
+    sessions = _("Submissions")
 
     # Translators: Ideally a term that is as broad as possible, to refer to anybody who
     # presents/owns a session. This word is also used to differentiate accepted „speakers“
