@@ -2,11 +2,11 @@ name: Documentation
 
 on:
   push:
-    branches: [ main ]
+    branches: [ 2021.2.1-lcas ]
     paths:
       - 'doc/**'
   pull_request:
-    branches: [ main ]
+    branches: [ 2021.2.1-lcas ]
     paths:
       - 'doc/**'
 

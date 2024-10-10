@@ -3,12 +3,12 @@ name: Tests
 on:
   workflow_dispatch:
   # push:
-  #   branches: [ main ]
+  #   branches: [ 2021.2.1-lcas ]
   #   paths-ignore:
   #     - 'doc/**'
   #     - 'src/pretalx/locale/**'
   # pull_request:
-  #   branches: [ main ]
+  #   branches: [ 2021.2.1-lcas ]
   #   paths-ignore:
   #     - 'doc/**'
   #     - 'src/pretalx/locale/**'

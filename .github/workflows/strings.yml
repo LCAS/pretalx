@@ -2,11 +2,11 @@ name: Strings
 
 on:
   push:
-    branches: [ main ]
+    branches: [ 2021.2.1-lcas ]
     paths:
       - 'src/pretalx/locale/**'
   pull_request:
-    branches: [ main ]
+    branches: [ 2021.2.1-lcas ]
     paths:
       - 'src/pretalx/locale/**'
 
