@@ -10,6 +10,6 @@ class SubmissionPhrases(Phrases, app="submission"):
     # after the title/object like [this].
     deleted = _("deleted")
 
-    submitted = pgettext_lazy("proposal status", "submitted")
-    in_review = pgettext_lazy("proposal status", "in review")
-    not_accepted = pgettext_lazy("proposal status", "not accepted")
+    submitted = pgettext_lazy("paper status", "submitted")
+    in_review = pgettext_lazy("paper status", "in review")
+    not_accepted = pgettext_lazy("paper status", "not accepted")

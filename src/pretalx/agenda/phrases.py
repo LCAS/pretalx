@@ -12,4 +12,4 @@ class AgendaPhrases(Phrases, app="agenda"):
 
     view_schedule = _("View conference schedule")
     view_schedule_preview = _("View schedule preview")
-    view_own_submissions = _("Edit or view your proposals")
+    view_own_submissions = _("Edit or view your papers")

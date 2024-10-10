@@ -9,7 +9,7 @@ class OrgaPhrases(Phrases, app="orga"):
         _("I think this session might fit the conference better, if ..."),
         _("I think this session sounds like a perfect fit for Day 2, since ..."),
         _("I think this session might be improved by adding ..."),
-        _("I have heard a similar session by this speaker, and I think ..."),
+        _("I have heard a similar session by this author, and I think ..."),
         _("In my opinion, this session will appeal to ..."),
         _("While I think the session is a great fit, it might be improved by ..."),
     ]
@@ -22,7 +22,7 @@ class OrgaPhrases(Phrases, app="orga"):
     )
     event_schedule_format_label = _("Schedule display format")
     proposal_id_help_text = _(
-        "The unique ID of a proposal is used in the proposal URL and in exports"
+        "The unique ID of a paper is used in the paper URL and in exports"
     )
     password_reset_success = _("The password was reset and the user was notified.")
     password_reset_fail = (
