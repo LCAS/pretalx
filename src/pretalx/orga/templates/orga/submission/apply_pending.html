@@ -8,7 +8,7 @@
             <h3>{% blocktranslate with count=submission_count trimmed %}Apply {{ count }} pending changes?{% endblocktranslate %}</h3>
 
             <p>
-                {% blocktranslate trimmed %} Please confirm that you really want to change the state of these {{ count }} proposals.{% endblocktranslate %}
+                {% blocktranslate trimmed %} Please confirm that you really want to change the state of these {{ count }} submissions.{% endblocktranslate %}
             </p>
 
             {% csrf_token %}

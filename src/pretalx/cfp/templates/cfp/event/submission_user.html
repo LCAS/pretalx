@@ -12,7 +12,7 @@
     <p>
         {% if request.GET.draft == '1' %}
             {% blocktranslate trimmed %}
-                Organisers will not be able to see your draft or your email address. They will be able to send you reminders about your pending proposal draft closer to the deadline.
+                Organisers will not be able to see your draft or your email address. They will be able to send you reminders about your pending submission draft closer to the deadline.
             {% endblocktranslate %}
         {% else %}
             {{ text|rich_text }}

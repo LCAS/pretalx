@@ -30,7 +30,7 @@
 
     <h2>{% translate "Your Profile" %}</h2>
     <p>
-        {% translate "This data will be displayed publicly if your proposal is accepted. It is also visible to reviewers." %}
+        {% translate "This data will be displayed publicly if your submission is accepted. It is also visible to reviewers." %}
     </p>
     <form method="post" enctype="multipart/form-data" class="speaker-profile-form">
         {% csrf_token %}
@@ -101,7 +101,7 @@
         </div>
         <div class="form-group"{% if not "really" in request.GET %} style="visibility:hidden;"{% endif %}>
             <input type="checkbox" name="really" id="really">
-            <label class="form-control-label" for="really">{% translate "I really do want to delete my account, losing access to my proposals and sessions, and overriding my public and private data." %}</label>
+            <label class="form-control-label" for="really">{% translate "I really do want to delete my account, losing access to my submissions and sessions, and overriding my public and private data." %}</label>
         </div>
         <div class="row">
             <div class="col-md-4 flip ml-auto">

@@ -15,7 +15,7 @@ class SchedulePhrases(Phrases, app="schedule"):
     # Translators: Ideally a term that is as broad as possible, to refer to anybody who
     # presents/owns a session. This word is also used to differentiate accepted „speakers“
     # from not-yet-accepted „submitters“. Plural, used in headings.
-    speakers = _("Speakers")
+    speakers = _("Authors")
 
     first_schedule = _("We released our first schedule!")
     wip_version = _(

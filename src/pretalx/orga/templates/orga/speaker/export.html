@@ -5,7 +5,7 @@
 
 {% block content %}
     <h2>
-        {% translate "Export speaker data" %}
+        {% translate "Export author data" %}
     </h2>
 
     <ul class="nav nav-tabs" id="myTab" role="tablist">
@@ -73,7 +73,7 @@
                     your administrator to install the plugin.
                 {% endblocktranslate %}
                 {% blocktranslate trimmed %}
-                    If you are looking for exports of proposals, sessions or schedule data, please head
+                    If you are looking for exports of submissions, sessions or schedule data, please head
                     here:
                 {% endblocktranslate %}
                 <a class="btn btn-outline-info btn-sm" href="{{ request.event.orga_urls.schedule_export }}">{% translate "Schedule exports" %}</a>

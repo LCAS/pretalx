@@ -23,7 +23,7 @@
             <p>
                 {% blocktranslate trimmed %}
                     Reviewers can be assigned to tracks by way of review teams. If you require more
-                    granular assignments, you can also assign reviewers to proposals individually.
+                    granular assignments, you can also assign reviewers to submissions individually.
                 {% endblocktranslate %}
             </p>
             <div class="alert alert-info">
@@ -97,12 +97,12 @@
                 <div class="alert alert-info"><p>
                     {% if request.event.active_review_phase.proposal_visibility == "assigned" %}
                         {% blocktranslate trimmed with href=request.event.orga_urls.review_settings %}
-                            Reviewers will be able to see and review <b>only their assigned</b> proposals.
+                            Reviewers will be able to see and review <b>only their assigned</b> submissions.
                             You can change this in your <a href="{{ href }}">review settings</a>.
                         {% endblocktranslate %}
                     {% else %}
                         {% blocktranslate trimmed with href=request.event.orga_urls.review_settings %}
-                            Reviewers will be able to see and review <b>all proposals</b>,
+                            Reviewers will be able to see and review <b>all submissions</b>,
                             but their assigned reviews will appear highlighted, and they
                             will be directed to them first. You can change this in your <a
                                 href="{{ href }}">review settings</a>.
@@ -111,8 +111,8 @@
                 </p></div>
                 <p>
                     {% blocktranslate trimmed %}
-                        This is where you can assign reviewers to specific proposals! Please use this drop-down to
-                        switch between the two assignment modes (assigning reviewers to proposals or proposals to reviewers).
+                        This is where you can assign reviewers to specific submissions! Please use this drop-down to
+                        switch between the two assignment modes (assigning reviewers to submissions or submissions to reviewers).
                     {% endblocktranslate %}
                     {% blocktranslate trimmed %}
                         You can also use the Actions menu above to import your assignments from a prepared file.

@@ -30,11 +30,11 @@
                     {% if notifications %}
                         {% blocktranslate trimmed count count=notifications %}
                             When releasing this new schedule, <strong>one notifications email
-                            </strong> can be generated and placed in the outbox, to tell speakers about their
+                            </strong> can be generated and placed in the outbox, to tell authors about their
                             session slots.
                         {% plural %}
                             When releasing this new schedule, <strong>{{ count }} notifications emails
-                            </strong> can be generated and placed in the outbox, to tell speakers about their
+                            </strong> can be generated and placed in the outbox, to tell authors about their
                             session slots.
                         {% endblocktranslate %}
                         <br>
@@ -42,7 +42,7 @@
                     {% else %}
                         {% blocktranslate trimmed %}
                             This schedule release would result in <strong>no notification emails</strong> for
-                            speakers.
+                            authors.
                         {% endblocktranslate %}
                     {% endif %}
                 </li>

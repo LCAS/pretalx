@@ -5,7 +5,7 @@
 {% block mail_content %}
     <form method="post">
         {% csrf_token %}
-        <h2>{% translate "Send reminder to unsubmitted proposal drafts" %}</h2>
+        <h2>{% translate "Send reminder to unsubmitted submission drafts" %}</h2>
         <div class="alert alert-warning">
             {% blocktranslate trimmed %}
                 These emails will be sent out immediately! They will not be

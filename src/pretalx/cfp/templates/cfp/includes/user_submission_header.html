@@ -7,13 +7,13 @@
 </h2>
 {% if submission.state != "draft" %}
     <p>
-        {% translate "Current state of your proposal:" %}
+        {% translate "Current state of your submission:" %}
         {% include "cfp/event/fragment_state.html" with state=submission.state %}
     </p>
 {% else %}
     <div class="alert alert-info">
         {% blocktranslate trimmed %}
-            This is a draft proposal.
+            This is a draft submission.
             It will never be visible to anybody else, unless you submit it or explicitly share it.
         {% endblocktranslate %}
     </div>

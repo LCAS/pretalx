@@ -18,15 +18,15 @@
     <div class="alert alert-info">
         {% if next_submission %}
             {% blocktranslate trimmed count count=missing_reviews %}
-                Or review the missing proposal here.
+                Or review the missing submission here.
             {% plural %}
-                Or review the missing {{ count }} proposals one-by-one.
+                Or review the missing {{ count }} submissions one-by-one.
             {% endblocktranslate %}
             <a href="{{ next_submission.orga_urls.reviews }}" class="btn btn-outline-info btn-xs ml-2">
                 <i class="fa fa-arrow-right"></i>
             </a>
         {% else %}
-            {% translate "You’ve got no proposals left to review!" %}
+            {% translate "You’ve got no submissions left to review!" %}
         {% endif %}
     </div>
 
@@ -97,7 +97,7 @@
                         </tr>
                     {% empty %}
                         <tr>
-                            <td colspan=10>{% translate "You don’t seem to have any proposals yet." %}</td>
+                            <td colspan=10>{% translate "You don’t seem to have any submissions yet." %}</td>
                         </tr>
                     {% endfor %}
                 </tbody>

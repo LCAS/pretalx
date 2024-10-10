@@ -7,10 +7,10 @@
     {% include "cfp/includes/user_submission_header.html" %}
     <form method="post">
         {% csrf_token %}
-        <h3>{% translate "Withdraw proposal" %}</h3>
+        <h3>{% translate "Withdraw submission" %}</h3>
         <div class="alert alert-danger">
             {% blocktranslate trimmed %}
-                Do you really want to withdraw your proposal?
+                Do you really want to withdraw your submission?
             {% endblocktranslate %}
         </div>
         <p>

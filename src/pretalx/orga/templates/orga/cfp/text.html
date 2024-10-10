@@ -17,14 +17,14 @@
 {% block cfp_content %}
     <div class="alert alert-info">
         <span>
-            {% translate "A good Call for Participation will engage potential speakers. Remember to include:" %}<br>
+            {% translate "A good Call for Participation will engage potential authors. Remember to include:" %}<br>
             <ul>
                 <li>{% translate "The formats (sessions, workshops, panels) and their durations" %}</li>
                 <li>{% translate "Topics you are looking for" %}</li>
                 <li>{% translate "How open you are to alternative topics" %}</li>
                 <li>{% translate "The people coming to your conference: interests, experience level …" %}</li>
                 <li>{% translate "Link your Code of Conduct and Data Protection statements." %}</li>
-                <li>{% translate "Do you offer financial or other support, e.g. support for first time speakers?" %}
+                <li>{% translate "Do you offer financial or other support, e.g. support for first time authors?" %}
                     <li>{% translate "Dates and location" %}</li>
                 </ul>
             </span>
@@ -64,10 +64,10 @@
                     </fieldset>
 
                     <fieldset>
-                        <legend id="information">{% translate "Proposal information" %}</legend>
+                        <legend id="information">{% translate "submission information" %}</legend>
                         <div class="offset-md-3 alert alert-info"><span>
-                            {% translate "Select which information should be requested and/or required during CfP proposal." %}
-                            <a href="{{ request.event.cfp.urls.submit }}">{% translate "Click here to view the proposal form." %}</a>
+                            {% translate "Select which information should be requested and/or required during CfP submission." %}
+                            <a href="{{ request.event.cfp.urls.submit }}">{% translate "Click here to view the submission form." %}</a>
                         </span></div>
                         <div class="table-responsive-sm"><table class="table offset-md-3 table-sm table-hover table-flip table-sticky" id="cfp-option-table">
                             <thead>
@@ -124,7 +124,7 @@
                                     <td></td>
                                 </tr>
                                 <tr>
-                                    <th>{% translate "Additional speakers" %}</th>
+                                    <th>{% translate "Additional authors" %}</th>
                                     <td class="hide-label">{% bootstrap_field sform.cfp_ask_additional_speaker layout='event-inline' %}</td>
                                     <td></td>
                                     <td></td>

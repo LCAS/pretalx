@@ -32,9 +32,9 @@
     <h2 class="d-flex justify-content-space-between">
         {{ form.instance.user.get_display_name }} ({{ submissions.count }}
         {% blocktranslate asvar proposal_title trimmed count count=submissions.count %}
-            proposal
+            submission
         {% plural %}
-            proposals
+            submissions
         {% endblocktranslate %}
         {{ proposal_title }}
         {% if can_send_mails %}

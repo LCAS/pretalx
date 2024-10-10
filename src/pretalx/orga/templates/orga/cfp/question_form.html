@@ -24,7 +24,7 @@
         {% if action == "edit" and question.answers.count %}
             <div class="alert alert-warning col-md-9 offset-md-3">
                 {% blocktranslate trimmed %}
-                    This question has already been answered by some speakers – please consider
+                    This question has already been answered by some authors – please consider
                     carefully if modifying it would render those answers obsolete. You could also
                     deactivate this question and start a new one instead.
                 {% endblocktranslate %}
@@ -67,7 +67,7 @@
             {% bootstrap_field form.is_visible_to_reviewers layout='event' %}
         </span>
         <fieldset class="limit-submission">
-            <legend>{% translate "Limit to specific proposals" %}</legend>
+            <legend>{% translate "Limit to specific submissions" %}</legend>
             {% if form.tracks %}
                 <span class="limit-submission">
                     {% bootstrap_field form.tracks layout='event' %}

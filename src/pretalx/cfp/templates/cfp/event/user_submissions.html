@@ -6,7 +6,7 @@
 {% load rules %}
 {% load static %}
 
-{% block title %}{% translate "Your proposals" %} :: {% endblock %}
+{% block title %}{% translate "Your submissions" %} :: {% endblock %}
 
 {% block content %}
     {% if information %}
@@ -64,7 +64,7 @@
             </table>
         </div>
     {% endif %}
-    <h2>{% translate "Your proposals" %}</h2>
+    <h2>{% translate "Your submissions" %}</h2>
     {% if submissions %}
         <div class="table-responsive">
             <table class="table table-sm table-flip">
@@ -109,9 +109,9 @@
                                 {% endif %}
                                 <a href="{{ submission.urls.user_base }}" class="btn btn-sm btn-info">
                                     {% if submission.editable %}
-                                        <i class="fa fa-edit" title="{% translate "Edit proposal" %}"></i>
+                                        <i class="fa fa-edit" title="{% translate "Edit submission" %}"></i>
                                     {% else %}
-                                        <i class="fa fa-edit" title="{% translate "Open proposal" %}"></i>
+                                        <i class="fa fa-edit" title="{% translate "Open submission" %}"></i>
                                     {% endif %}
                                 </a>
                                 {% if submission.state == 'accepted' %}
@@ -136,7 +136,7 @@
             {% if request.event.cfp.is_open %}
                 <a class="btn btn-success btn-lg"
                    href="{{ request.event.urls.submit }}">
-                    {% translate "Create a new proposal" %}
+                    {% translate "Create a new submission" %}
                 </a>
             {% endif %}
         </p>
@@ -149,7 +149,7 @@
         </p>
         {% if request.event.cfp.is_open %}
             <p class="text-center">
-                {% translate "If you did not, why not go ahead and create a proposal now? We’d love to hear from you!" %}
+                {% translate "If you did not, why not go ahead and create a submission now? We’d love to hear from you!" %}
             </p>
             <p class="text-center">
                 <a class="btn btn-success btn-lg btn-block"

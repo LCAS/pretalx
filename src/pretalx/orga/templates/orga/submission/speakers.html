@@ -10,13 +10,13 @@
     {% if can_edit_speakers %}<div class="alert">
         <form method="POST" action="{{ submission.orga_urls.new_speaker }}" class="form flex-row">
             <label>
-                {% translate "Add a speaker – if the email address isn’t registered yet, an account will be created for them and an invitation sent." %}:<br>
+                {% translate "Add a author – if the email address isn’t registered yet, an account will be created for them and an invitation sent." %}:<br>
             </label>
             {% csrf_token %}
             <div class="input-group" id="speaker-typeahead">
                 <input type="text" name="speaker" id="id_speaker" class="form-control" placeholder="{% translate "E-mail address" %}"/>
                 <input type="text" name="name" id="id_speaker_name" class="form-control" placeholder="{% translate "Name" %}" />
-                <button type="submit" class="btn btn-sm btn-success float-right"><i class="fa fa-plus"></i> {% translate "Add speaker" %}</button>
+                <button type="submit" class="btn btn-sm btn-success float-right"><i class="fa fa-plus"></i> {% translate "Add author" %}</button>
             </div>
         </form>
     </div>{% endif %}
@@ -36,7 +36,7 @@
             {% endif %}
             <p class="card-text">
                 {% if speaker.other_submissions %}
-                    <h5>{% translate "Other proposals by this speaker:" %}</h5>
+                    <h5>{% translate "Other submissions by this speaker:" %}</h5>
                     <ul>
                         {% for submission in speaker.other_submissions %}
                             <li>

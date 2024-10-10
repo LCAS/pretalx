@@ -40,8 +40,8 @@
             <thead>
                 <tr>
                     <th>{% translate "Name" %}</th>
-                    <th class="numeric">{% translate "Accepted Proposals" %}</th>
-                    <th class="numeric">{% translate "Proposals" %}</th>
+                    <th class="numeric">{% translate "Accepted submissions" %}</th>
+                    <th class="numeric">{% translate "submissions" %}</th>
                     {% if can_mark_speaker or can_see_speaker_status %}<th></th>{% endif %}
                 </tr>
             </thead>
@@ -57,9 +57,9 @@
                                     {% if can_mark_speaker %}
                                         <a class="btn btn-sm btn-{{ profile.has_arrived|yesno:'success,info' }}" href="{{ profile.orga_urls.toggle_arrived }}?from=list">
                                             {% if profile.has_arrived %}
-                                                {% translate "Mark speaker as not arrived" %}
+                                                {% translate "Mark author as not arrived" %}
                                             {% else %}
-                                                {% translate "Mark speaker as arrived" %}
+                                                {% translate "Mark author as arrived" %}
                                             {% endif %}
                                         </a>
                                     {% else %}

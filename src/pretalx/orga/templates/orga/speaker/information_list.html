@@ -5,15 +5,15 @@
     <h2>
         {{ information.count }}
         {% blocktranslate trimmed count count=information.count %}
-            Speaker Information Note
+            author Information Note
         {% plural %}
-            Speaker Information Notes
+            author Information Notes
         {% endblocktranslate %}
     </h2>
     <div class="alert alert-info">
         {% blocktranslate trimmed %}
             Add important messages (e.g. “Please bring an HDMI adapter if required.”) or files (e.g. a conference styleguide).<br>
-            They are shown to the selected speakers above the list of their submitted sessions.
+            They are shown to the selected authors above the list of their submitted sessions.
         {% endblocktranslate %}
     </div>
     <div class="d-flex justify-content-end mb-3"><span></span>

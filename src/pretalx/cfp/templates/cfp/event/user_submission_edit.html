@@ -50,7 +50,7 @@
         <form class="add-speaker" action="{{ submission.urls.invite }}">
             <div class="form-group form-inline">
                 {% if submission.state == "confirmed" %}
-                    {% blocktranslate trimmed count count=submission.speakers.count %}Speaker{% plural %}Speakers{% endblocktranslate %}:
+                    {% blocktranslate trimmed count count=submission.speakers.count %}author{% plural %}authors{% endblocktranslate %}:
                 {% else %}
                     {% blocktranslate trimmed count count=submission.speakers.count %}Submitter{% plural %}Submitters{% endblocktranslate %}:
                 {% endif %}
@@ -85,7 +85,7 @@
                                 {% translate "Save draft" %}
                             </button>
                             <button type="submit" class="btn btn-block btn-success btn-lg mt-0 ml-2" name="action" value="dedraft">
-                                {% translate "Submit proposal" %}
+                                {% translate "Submit paper" %}
                             </button>
                         </div>
                 {% else %}
@@ -98,18 +98,18 @@
             </div>
         {% endif %}
     </form>
-    <h3 id="share-proposal">{% translate "Share proposal" %}</h3>
+    <h3 id="share-submission">{% translate "Share submission" %}</h3>
     <p>
         {% blocktranslate trimmed %}
-            If you need a review from a colleague or a friend here’s a link that you can send out for viewing your proposal:
+            If you need a review from a colleague or a friend here’s a link that you can send out for viewing your submission:
         {% endblocktranslate %}
         <a target="_blank" rel="noopener" href="{{ submission.urls.review.full }}">{{ submission.urls.review.full }}</a>
     </p>
     {% if submission.state == "submitted" or submission.state == "accepted" %}
-        <h3>{% translate "Withdraw proposal" %}</h3>
+        <h3>{% translate "Withdraw submission" %}</h3>
         <p>
             {% blocktranslate trimmed %}
-                You can withdraw your proposal from the selection process here. You cannot undo this - if you are
+                You can withdraw your submission from the selection process here. You cannot undo this - if you are
                 just uncertain if you can or should hold your session, please contact the organiser instead.
             {% endblocktranslate %}
         </p>
@@ -122,11 +122,11 @@
             </div>
         </div>
     {% elif submission.state == "draft" %}
-        <h3>{% translate "Discard draft proposal" %}</h3>
+        <h3>{% translate "Discard draft submission" %}</h3>
         <p>
             {% blocktranslate trimmed %}
-                You can discard your draft proposal here. You cannot undo this - if you are
-                just uncertain if you can or should submit your proposal, please contact the organiser instead.
+                You can discard your draft submission here. You cannot undo this - if you are
+                just uncertain if you can or should submit your submission, please contact the organiser instead.
             {% endblocktranslate %}
         </p>
         <div class="row">
@@ -138,10 +138,10 @@
             </div>
         </div>
     {% elif submission.state == "confirmed" %}
-        <h3>{% translate "Cancel proposal" %}</h3>
+        <h3>{% translate "Cancel submission" %}</h3>
         <p>
             {% blocktranslate trimmed %}
-                As your proposal has been accepted already, please contact the event’s organising team to cancel
+                As your submission has been accepted already, please contact the event’s organising team to cancel
                 it. The best way to reach out would be an answer to your acceptance mail.
             {% endblocktranslate %}
         </p>

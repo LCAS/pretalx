@@ -30,12 +30,12 @@
                         {% if event.submission_count %}
                             {{ event.submission_count }}
                             {% blocktranslate trimmed count count=event.submission_count %}
-                                proposal
+                                submission
                             {% plural %}
-                                proposals
+                                submissions
                             {% endblocktranslate %}
                         {% else %}
-                            {% translate "No proposals yet" %}
+                            {% translate "No submissions yet" %}
                         {% endif %}
                     </div>
                     {% if event.is_public %}
@@ -66,12 +66,12 @@
                             {% if event.submission_count %}
                                 {{ event.submission_count }}
                                 {% blocktranslate trimmed count count=event.submission_count %}
-                                    proposal
+                                    submission
                                 {% plural %}
-                                    proposals
+                                    submissions
                                 {% endblocktranslate %}
                             {% else %}
-                                {% translate "No proposals yet" %}
+                                {% translate "No submissions yet" %}
                             {% endif %}
                         </div>
                         {% if event.is_public %}
