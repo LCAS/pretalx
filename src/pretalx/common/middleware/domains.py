@@ -1,4 +1,8 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import time
+from contextlib import suppress
 from urllib.parse import urljoin, urlparse
 
 from django.conf import settings
@@ -7,25 +11,37 @@ from django.contrib.sessions.middleware import (
     SessionMiddleware as BaseSessionMiddleware,
 )
 from django.core.exceptions import DisallowedHost
-from django.db.models import Q
 from django.http import Http404
 from django.http.request import split_domain_port
 from django.middleware.csrf import CSRF_SESSION_KEY
 from django.middleware.csrf import CsrfViewMiddleware as BaseCsrfMiddleware
 from django.shortcuts import redirect
-from django.urls import resolve
+from django.urls import Resolver404, resolve
 from django.utils.cache import patch_vary_headers
 from django.utils.http import http_date
 
+from pretalx.event.domain.queries.event import events_for_custom_domain
 from pretalx.event.models.event import Event
 
 LOCAL_HOST_NAMES = ("testserver", "localhost", "127.0.0.1")
-ANY_DOMAIN_ALLOWED = ("robots.txt",)
+ANY_DOMAIN_ALLOWED = ("robots.txt", "redirect", "event.css")
 
 
 class MultiDomainMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
+
+    @staticmethod
+    def _attach_event_from_path(request):
+        parts = request.path.strip("/").split("/")
+        if not parts or not parts[0]:
+            return
+        if parts[0] == "orga" and len(parts) >= 3 and parts[1] == "event":
+            slug = parts[2]
+        else:
+            slug = parts[0]
+        with suppress(Event.DoesNotExist, ValueError):
+            request.event = Event.objects.get(slug__iexact=slug)
 
     @staticmethod
     def get_host(request):
@@ -51,7 +67,12 @@ class MultiDomainMiddleware:
         request.port = int(port) if port else None
         request.uses_custom_domain = False
 
-        resolved = resolve(request.path)
+        try:
+            resolved = resolve(request.path)
+        except Resolver404:
+            # Attach the event anyway so 404 pages can pick up the event theme.
+            self._attach_event_from_path(request)
+            raise
         if resolved.url_name in ANY_DOMAIN_ALLOWED or request.path.startswith("/api/"):
             return None
         event_slug = resolved.kwargs.get("event")
@@ -61,7 +82,7 @@ class MultiDomainMiddleware:
             except (Event.DoesNotExist, ValueError):
                 # A ValueError can happen if the event slug contains malicious input
                 # like NUL bytes. We return a 404 here to avoid leaking information.
-                raise Http404()
+                raise Http404 from None
             request.event = event
             if event.custom_domain:
                 custom_domain = urlparse(event.custom_domain)
@@ -69,7 +90,7 @@ class MultiDomainMiddleware:
                 if event_domain == domain and event_port == port:
                     request.uses_custom_domain = True
                     return None
-                elif domain == default_domain:
+                if domain == default_domain and not request.path.startswith("/orga"):
                     return redirect(
                         urljoin(event.urls.base.full(), request.get_full_path())
                     )
@@ -79,7 +100,7 @@ class MultiDomainMiddleware:
             # to the proper domain would leak information, so we will show a 404
             # instead.
             if not request.path.startswith("/orga"):
-                raise Http404()
+                raise Http404
 
         if domain == default_domain:
             return None
@@ -87,17 +108,15 @@ class MultiDomainMiddleware:
         if settings.DEBUG or domain in LOCAL_HOST_NAMES:
             return None
 
-        if request.path.startswith("/orga"):  # pragma: no cover
+        if request.path.startswith("/orga"):
             return redirect(urljoin(settings.SITE_URL, request.get_full_path()))
 
         # If this domain is used as custom domain, but we are trying to view a
         # non-event page, try to redirect to the most recent event instead.
-        events = Event.objects.filter(
-            Q(custom_domain=f"{request.scheme}://{domain}")
-            | Q(custom_domain=f"{request.scheme}://{host}"),
-        ).order_by("-date_from")
+        events = events_for_custom_domain(request.scheme, host, domain=domain)
         if events:
             request.uses_custom_domain = True
+            request.custom_domain_events = events
             public_event = events.filter(is_public=True).first()
             if public_event:
                 return redirect(public_event.urls.base.full())
@@ -113,11 +132,14 @@ class MultiDomainMiddleware:
         raise DisallowedHost(f"Unknown host: {host}")
 
     def process_response(self, request, response):
-        if request.path.startswith("/orga"):
-            if (event := getattr(request, "event", None)) and event.custom_domain:
-                # We need to update the CSP in order to make our fancy login form work
-                response._csp_update = getattr(response, "_csp_update", None) or {}
-                response._csp_update["form-action"] = [event.urls.base.full()]
+        if (
+            request.path.startswith("/orga")
+            and (event := getattr(request, "event", None))
+            and event.custom_domain
+        ):
+            # We need to update the CSP in order to make our fancy login form work
+            response._csp_update = getattr(response, "_csp_update", None) or {}  # noqa: SLF001 -- django-csp convention
+            response._csp_update["form-action"] = [event.urls.base.full()]  # noqa: SLF001 -- django-csp convention
         return response
 
     def __call__(self, request):
@@ -144,7 +166,7 @@ class SessionMiddleware(BaseSessionMiddleware):
             accessed = request.session.accessed
             modified = request.session.modified
             empty = request.session.is_empty()
-        except AttributeError:  # pragma: no cover
+        except AttributeError:
             pass
         else:
             # First check if we need to delete this cookie.
@@ -166,7 +188,7 @@ class SessionMiddleware(BaseSessionMiddleware):
                 if response.status_code != 500:
                     try:
                         request.session.save()
-                    except UpdateError:  # pragma: no cover
+                    except UpdateError:
                         request.session.create()
                     response.set_cookie(
                         settings.SESSION_COOKIE_NAME,
@@ -177,6 +199,7 @@ class SessionMiddleware(BaseSessionMiddleware):
                         path=settings.SESSION_COOKIE_PATH,
                         secure=request.scheme == "https",
                         httponly=settings.SESSION_COOKIE_HTTPONLY or None,
+                        samesite=settings.SESSION_COOKIE_SAMESITE,
                     )
         return response
 
@@ -193,7 +216,7 @@ class CsrfViewMiddleware(BaseCsrfMiddleware):
     depending on whether we are on the main domain or a custom domain.
     """
 
-    def _set_cookie_csrf(self, request, response):
+    def _set_csrf_cookie(self, request, response):
         # If CSRF_COOKIE is unset, then CsrfViewMiddleware.process_view was
         # never called, probably because a request middleware returned a response
         # (for example, contrib.auth redirecting to a login page).
@@ -211,6 +234,7 @@ class CsrfViewMiddleware(BaseCsrfMiddleware):
                 path=settings.CSRF_COOKIE_PATH,
                 secure=request.scheme == "https",
                 httponly=settings.CSRF_COOKIE_HTTPONLY,
+                samesite=settings.CSRF_COOKIE_SAMESITE,
             )
             # Content varies with the CSRF cookie, so set the Vary header.
             patch_vary_headers(response, ("Cookie",))

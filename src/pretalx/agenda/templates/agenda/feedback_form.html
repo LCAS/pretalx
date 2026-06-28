@@ -1,16 +1,17 @@
 {% extends "agenda/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load bootstrap4 %}
-{% load compress %}
+{% load form_media %}
 {% load i18n %}
-{% load static %}
 
-{% block agenda_custom_header %}
-    {% include "cfp/includes/forms_header.html" %}
+{% block agenda_stylesheets %}
+    {% form_media %}
 {% endblock %}
 
 {% block content %}
-
     <h3 class="talk-title">
         <a href="{{ talk.urls.public }}">{{ quotation_open }}{{ talk.title }}{{ quotation_close }}</a>
     </h3>
@@ -18,23 +19,18 @@
         <div class="talk-content">
             <div class="description">
                 {% blocktranslate trimmed %}
-                    Reviews are a valuable tool for speakers to improve their content and presentation.
-                    Even a short review can prove valuable to a speaker! Please
-                    take the time and communicate your feedback in a constructive way.
+                    Feedback is a valuable tool for speakers to improve their content and presentation. Even short
+                    feedback can prove valuable to a speaker! Please take the time and communicate your thoughts in a
+                    constructive way.
                 {% endblocktranslate %}
                 {{ phrases.agenda.feedback_success }}
                 {% if not talk.does_accept_feedback or not can_give_feedback %}
                     {% translate "You can’t give feedback for this session at this time." %}
                 {% else %}
-                    <form method="post">
-                        {% bootstrap_form_errors form %}
+                    <form method="post" novalidate>
                         {% csrf_token %}
-                        {% if speakers|length > 1 %}
-                            {% bootstrap_field form.speaker layout="inline" %}
-                        {% endif %}
-                        <div class="markdown-column">{% bootstrap_field form.review layout="inline" %}</div>
-
-                        <button type="submit" class="btn btn-success float-right">{{ phrases.base.send }}</button>
+                        {{ form }}
+                        <button type="submit" class="btn-success float-right">{{ phrases.base.send }}</button>
                     </form>
                 {% endif %}
             </div>

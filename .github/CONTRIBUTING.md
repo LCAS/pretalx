@@ -1,9 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: CC-BY-SA-4.0
+-->
+
 Contributing to pretalx
 =======================
 
-Hey there and welcome to pretalx!
-
-We've got an contributors guide in [our documentation](http://docs.pretalx.org/developer/index.html).
-
-Please note that we have a [Code of Conduct](https://github.com/pretalx/pretalx/blob/master/CODE_OF_CONDUCT.md) in place
-that applies to all project contributions, including issues, pull requests, etc.
+Before you start contributing to pretalx, please read [our contribution policy](https://docs.pretalx.org/developer/contributing/).

@@ -1,12 +1,31 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import pgettext_lazy
 from django_scopes import ScopedManager
 from i18nfield.fields import I18nCharField
 
-from pretalx.common.models.mixins import OrderedModel, PretalxModel
+from pretalx.common.models.fields import DateTimeField, MarkdownField
+from pretalx.common.models.mixins import PretalxModel
 from pretalx.common.urls import EventUrls
+from pretalx.person.rules import is_administrator, is_reviewer
+from pretalx.submission.rules import (
+    can_be_reviewed,
+    can_view_all_reviews,
+    can_view_reviewer_names,
+    can_view_reviews,
+    has_reviewer_access,
+    is_review_author,
+    orga_can_change_submissions,
+    reviews_are_open,
+)
+from pretalx.submission.validators.review import (
+    validate_non_independent_category_remains,
+)
 
 
 class ReviewScoreCategory(PretalxModel):
@@ -35,31 +54,20 @@ class ReviewScoreCategory(PretalxModel):
         base = "{self.event.orga_urls.review_settings}category/{self.pk}/"
         delete = "{base}delete"
 
-    @classmethod
-    def recalculate_scores(cls, event):
-        for review in event.reviews.all():
-            review.save(update_score=True)
-
-    def _validate_independence(self):
-        if (
-            not self.event.score_categories.exclude(pk=self.pk)
-            .filter(is_independent=False)
-            .exists()
-        ):
-            raise ValidationError(
-                _("You need to keep at least one non-independent score category!")
-            )
+    def clean(self):
+        super().clean()
+        if self.is_independent and not self._state.adding:
+            # The remaining-non-independent check only matters when an existing
+            # category is being flipped to independent.
+            validate_non_independent_category_remains(self)
 
     def save(self, *args, **kwargs):
         if self.is_independent:
-            if self.pk:
-                self._validate_independence()
             self.weight = 0
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        if self.is_independent:
-            self._validate_independence()
+        validate_non_independent_category_remains(self)
         return super().delete(*args, **kwargs)
 
 
@@ -78,35 +86,15 @@ class ReviewScore(PretalxModel):
     def format(self, fmt):
         if fmt == "words":
             return self.label
-
-        value = self.value
-        if int(value) == value:
-            value = int(value)
-
-        # we ignore the format if label and value are the same
-        if fmt == "numbers" or (self.label and self.label == str(value)):
+        value = int(self.value) if int(self.value) == self.value else self.value
+        if fmt == "numbers" or self.label == str(value):
             return str(value)
-
-        if fmt == "words_numbers":
-            return f"{self.label} ({value})"
-        # only remaining version is "numbers_words"
-        return f"{value} ({self.label})"
+        if fmt == "numbers_words":
+            return f"{value} ({self.label})"
+        return f"{self.label} ({value})"
 
     class Meta:
         ordering = ("value",)
-
-
-class ReviewManager(models.Manager):
-    def get_queryset(self):
-        from pretalx.submission.models.submission import SubmissionStates
-
-        return (
-            super().get_queryset().exclude(submission__state=SubmissionStates.DELETED)
-        )
-
-
-class AllReviewManager(models.Manager):
-    pass
 
 
 class Review(PretalxModel):
@@ -118,8 +106,9 @@ class Review(PretalxModel):
 
     :param text: The review itself. May be empty.
     :param score: This score is calculated from all the related ``scores``
-        and their weights. Do not set it directly, use the ``update_score``
-        method instead.
+        and their weights. Do not set it directly; call
+        ``pretalx.submission.domain.review.update_review_score`` after
+        modifying the m2m scores.
     """
 
     submission = models.ForeignKey(
@@ -128,93 +117,44 @@ class Review(PretalxModel):
     user = models.ForeignKey(
         to="person.User", related_name="reviews", on_delete=models.CASCADE
     )
-    text = models.TextField(verbose_name=_("What do you think?"), null=True, blank=True)
+    text = MarkdownField(verbose_name=_("Review"), null=True, blank=True)
     score = models.DecimalField(
-        max_digits=10, decimal_places=2, verbose_name=_("Score"), null=True, blank=True
+        max_digits=10,
+        decimal_places=2,
+        verbose_name=pgettext_lazy("review score/rating", "Score"),
+        null=True,
+        blank=True,
     )
     scores = models.ManyToManyField(to=ReviewScore, related_name="reviews")
 
-    objects = ScopedManager(event="submission__event", _manager_class=ReviewManager)
-    all_objects = ScopedManager(
-        event="submission__event", _manager_class=AllReviewManager
-    )
+    objects = ScopedManager(event="submission__event")
+
+    log_prefix = "pretalx.submission.review"
 
     class Meta:
         unique_together = (("user", "submission"),)
+        rules_permissions = {
+            "list": orga_can_change_submissions | is_reviewer,
+            "list_all": orga_can_change_submissions
+            | (is_reviewer & can_view_all_reviews),
+            "list_reviewers": orga_can_change_submissions
+            | (is_reviewer & can_view_reviewer_names),
+            "view": is_review_author
+            | (is_reviewer & can_view_reviews)
+            | orga_can_change_submissions,
+            # Needs to be coupled with a check on has_reviewer_access & can_be_reviewed
+            # on the proposal – but we don’t have that at create time yet.
+            "create": is_reviewer & reviews_are_open,
+            "update": has_reviewer_access & is_review_author & can_be_reviewed,
+            "delete": is_administrator | (is_review_author & can_be_reviewed),
+        }
 
     def __str__(self):
         return f"Review(event={self.submission.event.slug}, submission={self.submission.title}, user={self.user.get_display_name}, score={self.score})"
 
-    @classmethod
-    def find_reviewable_submissions(cls, event, user, ignore=None):
-        """Returns all :class:`~pretalx.submission.models.submission.Submission`
-        objects this :class:`~pretalx.person.models.user.User` is allowed to review,
-        regardless of whether they have already reviewed them.
-
-        Excludes submissions this user has submitted, and takes track
-        :class:`~pretalx.event.models.organiser.Team` permissions into account,
-        as well as assignments if the current review phase is limited to assigned
-        proposals. The result is ordered by review count.
-
-        :type event: :class:`~pretalx.event.models.event.Event`
-        :type user: :class:`~pretalx.person.models.user.User`
-        :rtype: Queryset of :class:`~pretalx.submission.models.submission.Submission` objects
-        """
-        from pretalx.submission.models import SubmissionStates
-
-        queryset = (
-            event.submissions.filter(state=SubmissionStates.SUBMITTED)
-            .exclude(speakers__in=[user])
-            .annotate(review_count=models.Count("reviews"))
-            .annotate(
-                is_assigned=models.Case(
-                    models.When(assigned_reviewers__in=[user], then=1), default=0
-                ),
-            )
-        )
-        phase = event.active_review_phase
-        if phase and phase.proposal_visibility == "assigned":
-            queryset = queryset.filter(is_assigned__gte=1)
-        else:
-            limit_tracks = user.teams.filter(
-                models.Q(all_events=True)
-                | models.Q(
-                    models.Q(all_events=False) & models.Q(limit_events__in=[event])
-                ),
-                limit_tracks__isnull=False,
-                organiser=event.organiser,
-            )
-            if limit_tracks.exists():
-                tracks = set()
-                for team in limit_tracks:
-                    tracks.update(team.limit_tracks.filter(event=event))
-                queryset = queryset.filter(track__in=tracks)
-        if ignore:
-            queryset = queryset.exclude(pk__in=ignore)
-        # This is not randomised, because order_by("review_count", "?") sets all annotated
-        # review_count values to 1.
-        return queryset.order_by("-is_assigned", "review_count")
-
-    @classmethod
-    def find_missing_reviews(cls, event, user, ignore=None):
-        """Returns all :class:`~pretalx.submission.models.submission.Submission`
-        objects this :class:`~pretalx.person.models.user.User` still has to review
-        for the given :class:`~pretalx.event.models.event.Event`. A subset of
-        ``find_reviewable_submissions``.
-
-        :type event: :class:`~pretalx.event.models.event.Event`
-        :type user: :class:`~pretalx.person.models.user.User`
-        :rtype: Queryset of :class:`~pretalx.submission.models.submission.Submission` objects
-        """
-        return cls.find_reviewable_submissions(event, user, ignore).exclude(
-            reviews__user=user
-        )
-
-    @classmethod
-    def calculate_score(cls, scores):
-        if not scores:
-            return None
-        return sum(score.value * score.category.weight for score in scores)
+    @property
+    def log_parent(self):
+        return self.submission
 
     @cached_property
     def event(self):
@@ -229,54 +169,39 @@ class Review(PretalxModel):
             return str(int(self.score))
         return str(self.score)
 
-    def update_score(self):
-        scores = (
-            self.scores.all()
-            .select_related("category")
-            .filter(category__in=self.submission.score_categories)
-        )
-        self.score = self.calculate_score(scores)
-
-    def save(self, *args, update_score=True, **kwargs):
-        if self.id and update_score:
-            self.update_score()
-        return super().save(*args, **kwargs)
-
     class urls(EventUrls):
         base = "{self.submission.orga_urls.reviews}"
-        delete = "{base}delete"
+        delete = "{base}{self.pk}/delete"
 
 
-class ReviewPhase(OrderedModel, PretalxModel):
+class ReviewPhase(PretalxModel):
     """ReviewPhases determine reviewer access rights during a (potentially
     open) time frame.
 
+    Phases are ordered by ``(start, end)``, with null-start phases first.
+
     :param is_active: Is this phase currently active? There can be only one
-        active phase per event. Use the ``activate`` method to activate a
-        review phase, as it will take care of this limitation.
-    :param position: Helper field to deal with relative positioning of review
-        phases next to each other.
+        active phase per event. Use
+        ``pretalx.submission.domain.review.activate_review_phase`` to
+        activate a phase, since it enforces that invariant.
     """
+
+    log_prefix = "pretalx.review_phase"
 
     event = models.ForeignKey(
         to="event.Event", related_name="review_phases", on_delete=models.CASCADE
     )
     name = models.CharField(verbose_name=_("Name"), max_length=100)
-    start = models.DateTimeField(verbose_name=_("Phase start"), null=True, blank=True)
-    end = models.DateTimeField(verbose_name=_("Phase end"), null=True, blank=True)
-    position = models.PositiveIntegerField(default=0)
+    start = DateTimeField(verbose_name=_("Phase start"), null=True, blank=True)
+    end = DateTimeField(verbose_name=_("Phase end"), null=True, blank=True)
     is_active = models.BooleanField(default=False)
 
     can_review = models.BooleanField(
-        verbose_name=_("Reviewers can write and edit reviews"),
-        default=True,
+        verbose_name=_("Reviewers can write and edit reviews"), default=True
     )
     proposal_visibility = models.CharField(
         verbose_name=_("Reviewers may see these proposals"),
-        choices=(
-            ("all", _("All")),
-            ("assigned", _("Only assigned proposals")),
-        ),
+        choices=(("all", _("All")), ("assigned", _("Only assigned proposals"))),
         max_length=8,
         default="all",
         help_text=_(
@@ -295,16 +220,13 @@ class ReviewPhase(OrderedModel, PretalxModel):
         default="after_review",
     )
     can_see_speaker_names = models.BooleanField(
-        verbose_name=_("Reviewers can see speaker names"),
-        default=True,
+        verbose_name=_("Reviewers can see speaker names"), default=True
     )
     can_see_reviewer_names = models.BooleanField(
-        verbose_name=_("Reviewers can see the names of other reviewers"),
-        default=True,
+        verbose_name=_("Reviewers can see the names of other reviewers"), default=True
     )
     can_change_submission_state = models.BooleanField(
-        verbose_name=_("Reviewers can accept and reject proposals"),
-        default=False,
+        verbose_name=_("Reviewers can accept and reject proposals"), default=False
     )
     can_tag_submissions = models.CharField(
         verbose_name=_("Reviewers can tag proposals"),
@@ -325,24 +247,26 @@ class ReviewPhase(OrderedModel, PretalxModel):
     )
 
     class Meta:
-        ordering = ("position",)
+        ordering = (
+            models.F("start").asc(nulls_first=True),
+            models.F("end").asc(nulls_first=True),
+        )
 
     class urls(EventUrls):
         base = "{self.event.orga_urls.review_settings}phase/{self.pk}/"
         delete = "{base}delete"
-        up = "{base}up"
-        down = "{base}down"
         activate = "{base}activate"
 
-    def activate(self) -> None:
-        """Activates this review phase and deactivates all others in this
-        event."""
-        self.event.review_phases.all().update(is_active=False)
-        self.is_active = True
-        self.save()
+    def __str__(self):
+        return self.name
 
-    activate.alters_data = True
+    def clean(self):
+        super().clean()
+        if self.start and self.end and self.start > self.end:
+            raise ValidationError(
+                {"end": _("The end of a phase has to be after its start.")}
+            )
 
-    @staticmethod
-    def get_order_queryset(event):
-        return event.review_phases.all()
+    @property
+    def log_parent(self):
+        return self.event

@@ -1,30 +1,41 @@
 {% extends "agenda/base.html" %}
-{% load compress %}
+{% comment %}
+SPDX-FileCopyrightText: 2018-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 {% load i18n %}
 {% load rich_text %}
-{% load static %}
+{% load thumbnail %}
 
 {% block agenda_content %}
     <p></p>
     <article>
-        <section style="--track-color: {{ request.event.get_primary_color }}" class="pretalx-list-day">
+        <section style="--track-color: {{ request.event.visible_primary_color }}" class="pretalx-list-day">
             {% for speaker in speakers %}
                 <a href="{{ speaker.urls.public }}">
                     <div class="pretalx-session">
                         <div class="pretalx-session-time-box avatar">
                             <div class="avatar-wrapper">
-                                {% if speaker.user.avatar_url and request.event.cfp.request_avatar %}
-                                    <img loading="lazy" src="{{ speaker.user.avatar_url }}" alt="{% translate "The speaker’s profile picture" %}">
+                                {% if speaker.avatar_url and request.event.cfp.request_avatar %}
+                                    <img
+                                        loading="lazy"
+                                        src="{{ speaker.avatar|thumbnail:'default' }}"
+                                        alt="{{ phrases.schedule.speaker_picture_alt }}"
+                                    >
                                 {% else %}
-                                    <img loading="lazy" src="{{ request.event.urls.speakers }}avatar.svg" alt="{% translate "The speaker’s profile picture" %}">
+                                    <img
+                                        loading="lazy"
+                                        src="{{ request.event.urls.speakers }}avatar.svg"
+                                        alt="{{ phrases.schedule.speaker_picture_alt }}"
+                                    >
                                 {% endif %}
                             </div>
                         </div>
                         <div class="pretalx-session-info">
-                            <div class="title">{{ speaker.user.get_display_name }}</div>
+                            <div class="title">{{ speaker.get_display_name }}</div>
                             <div class="abstract">{{ speaker.biography|default:""|rich_text_without_links }}</div>
                             <ul>
-                                {% for talk in speaker.talks %}
+                                {% for talk in speaker.visible_talks %}
                                     <li>{{ talk.title }}</li>
                                 {% endfor %}
                             </ul>

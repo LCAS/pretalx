@@ -1,11 +1,15 @@
 {% extends "cfp/event/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
 {% load i18n %}
 
-{% block title %}{{ proposal.title }} :: {% endblock title %}
+{% block title %}{{ proposal.title }} ::
+{% endblock title %}
 
 {% block content %}
-
     {% include "cfp/includes/user_submission_header.html" %}
 
     <form method="post">
@@ -17,8 +21,7 @@
             {% endblocktranslate %}
         </div>
         <p>
-            <button type="submit"
-                    class="btn float-right btn-danger">
+            <button type="submit" class="btn float-right btn-danger">
                 {% translate "Withdraw" %}
             </button>
             <a href="{{ submission.urls.user_base }}" class="btn float-right btn-info">

@@ -1,4 +1,11 @@
-from django.db.models import Count, Q
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: Florian Mösch
+# SPDX-FileContributor: luto
+
+from django.db.models import Q
 from django.shortcuts import redirect
 from django.template.defaultfilters import timeuntil
 from django.urls import reverse
@@ -10,20 +17,29 @@ from django.views.generic import TemplateView
 from django_context_decorator import context
 from django_scopes import scopes_disabled
 
-from pretalx.common.models.log import ActivityLog
+from pretalx.common.domain.queries.log import event_activity_log
 from pretalx.common.text.phrases import phrases
 from pretalx.common.views.mixins import EventPermissionRequired, PermissionRequired
-from pretalx.event.models import Event, Organiser
-from pretalx.event.stages import get_stages
-from pretalx.submission.models import Review, Submission, SubmissionStates
+from pretalx.event.domain.queries.event import speaker_events_for_user
+from pretalx.event.domain.queries.organiser import organisers_for_user
+from pretalx.event.domain.queries.team import (
+    active_reviewers_for_event,
+    user_reviewer_teams_in_event,
+)
+from pretalx.event.domain.stages import get_stages
+from pretalx.mail.enums import QueuedMailStates
+from pretalx.orga.signals import dashboard_tile
+from pretalx.submission.domain.queries.submission import (
+    annotate_submission_count,
+    unreviewed_submissions_for_user,
+)
+from pretalx.submission.models import Submission, SubmissionStates
 
 
 def start_redirect_view(request):
     with scopes_disabled():
         orga_events = set(request.user.get_events_with_any_permission())
-        speaker_events = set(
-            Event.objects.filter(submissions__speakers__in=[request.user])
-        )
+        speaker_events = set(speaker_events_for_user(request.user))
 
     # Users with only one event, in only one role, are redirected to that event
     if len(orga_events | speaker_events) == 1 and not (orga_events and speaker_events):
@@ -43,19 +59,7 @@ class DashboardEventListView(TemplateView):
 
     @cached_property
     def queryset(self):
-        qs = self.base_queryset.annotate(
-            submission_count=Count(
-                "submissions",
-                filter=Q(
-                    submissions__state__in=[
-                        state
-                        for state in SubmissionStates.display_values.keys()
-                        if state
-                        not in (SubmissionStates.DELETED, SubmissionStates.DRAFT)
-                    ]
-                ),
-            )
-        )
+        qs = annotate_submission_count(self.base_queryset).order_by("-date_from")
         if search := self.request.GET.get("q"):
             qs = qs.filter(Q(name__icontains=search) | Q(slug__icontains=search))
         return qs
@@ -66,19 +70,18 @@ class DashboardEventListView(TemplateView):
         context["past_orga_events"] = []
         for event in self.queryset:
             if event.date_to >= now().date():
-                context["current_orga_events"].append(event)
+                context["current_orga_events"].insert(0, event)
             else:
                 context["past_orga_events"].append(event)
-        context["speaker_events"] = (
-            Event.objects.filter(submissions__speakers__in=[self.request.user])
-            .distinct()
-            .order_by("-date_from")
-        )
+        context["speaker_events"] = speaker_events_for_user(self.request.user)
         return context
 
 
 class DashboardOrganiserEventListView(PermissionRequired, DashboardEventListView):
-    permission_required = "orga.view_organisers"
+    permission_required = "event.view_organiser"
+
+    def get_permission_object(self):
+        return self.request.organiser
 
     @property
     def base_queryset(self):
@@ -91,7 +94,7 @@ class DashboardOrganiserEventListView(PermissionRequired, DashboardEventListView
 
 class DashboardOrganiserListView(PermissionRequired, TemplateView):
     template_name = "orga/organiser/list.html"
-    permission_required = "orga.view_organisers"
+    permission_required = "event.list_organiser"
 
     def filter_organiser(self, organiser, query):
         name = (
@@ -104,21 +107,7 @@ class DashboardOrganiserListView(PermissionRequired, TemplateView):
 
     @context
     def organisers(self):
-        if self.request.user.is_administrator:
-            orgs = Organiser.objects.all()
-        else:
-            orgs = Organiser.objects.filter(
-                pk__in={
-                    team.organiser_id
-                    for team in self.request.user.teams.filter(
-                        can_change_organiser_settings=True
-                    )
-                }
-            )
-        orgs = orgs.annotate(
-            event_count=Count("events", distinct=True),
-            team_count=Count("teams", distinct=True),
-        )
+        orgs = organisers_for_user(self.request.user)
         query = self.request.GET.get("q")
         if not query:
             return orgs
@@ -128,15 +117,15 @@ class DashboardOrganiserListView(PermissionRequired, TemplateView):
 
 class EventDashboardView(EventPermissionRequired, TemplateView):
     template_name = "orga/event/dashboard.html"
-    permission_required = "orga.view_orga_area"
+    permission_required = "event.orga_access_event"
 
-    def get_cfp_tiles(self, _now):
+    def get_cfp_tiles(self, _now, can_change_submissions=False):
         result = []
         if self.request.event.cfp.is_open:
             result.append(
                 {
                     "url": self.request.event.cfp.urls.public,
-                    "large": phrases.cfp.go_to_cfp,
+                    "large": _("Go to CfP"),
                     "priority": 20,
                 }
             )
@@ -152,7 +141,7 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
             draft_proposals = Submission.all_objects.filter(
                 state=SubmissionStates.DRAFT, event=self.request.event
             ).count()
-            if draft_proposals:
+            if draft_proposals and can_change_submissions:
                 result.append(
                     {
                         "large": draft_proposals,
@@ -172,19 +161,11 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                 )
         return result
 
-    def get_review_tiles(self):
+    def get_review_tiles(self, can_change_settings):
         result = []
         review_count = self.request.event.reviews.count()
-        can_change_settings = self.request.user.has_perm(
-            "orga.change_settings", self.request.event
-        )
         if review_count:
-            active_reviewers = (
-                self.request.event.reviewers.filter(reviews__isnull=False)
-                .order_by("id")
-                .distinct()
-                .count()
-            )
+            active_reviewers = active_reviewers_for_event(self.request.event).count()
             result.append(
                 {"large": review_count, "small": _("Reviews"), "priority": 60}
             )
@@ -200,11 +181,11 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                     "priority": 60,
                 }
             )
-        is_reviewer = self.request.event.teams.filter(
-            members__in=[self.request.user], is_reviewer=True
+        is_reviewer = user_reviewer_teams_in_event(
+            self.request.user, self.request.event
         ).exists()
         if is_reviewer:
-            reviews_missing = Review.find_missing_reviews(
+            reviews_missing = unreviewed_submissions_for_user(
                 self.request.event, self.request.user
             ).count()
             if reviews_missing:
@@ -222,11 +203,18 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                 )
         return result
 
+    def get_plugin_tiles(self):
+        tiles = []
+        for __, response in dashboard_tile.send_robust(sender=self.request.event):
+            if isinstance(response, list):
+                tiles.extend(response)
+            else:
+                tiles.append(response)
+        return tiles
+
     @context
     def history(self):
-        return ActivityLog.objects.filter(event=self.request.event).select_related(
-            "person", "event"
-        )[:20]
+        return event_activity_log(self.request.event)[:20]
 
     def get_context_data(self, **kwargs):
         # Tiles can have priorities
@@ -244,7 +232,15 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
         )
         _now = now()
         today = _now.date()
-        result["tiles"] = self.get_cfp_tiles(_now)
+        can_change_settings = self.request.user.has_perm(
+            "event.change_settings.event", event
+        )
+        can_change_submissions = self.request.user.has_perm(
+            "submission.orga_update_submission", event
+        )
+        result["tiles"] = self.get_cfp_tiles(
+            _now, can_change_submissions=can_change_submissions
+        )
         if today < event.date_from:
             days = (event.date_from - today).days
             result["tiles"].append(
@@ -257,7 +253,7 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                 }
             )
         elif today > event.date_to:
-            days = (today - event.date_from).days
+            days = (today - event.date_to).days
             result["tiles"].append(
                 {
                     "large": days,
@@ -290,14 +286,22 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
             )
 
         talk_count = event.talks.count()
+        accepted_count = event.submissions.filter(
+            state=SubmissionStates.ACCEPTED
+        ).count()
         submission_count = event.submissions.count()
-        if talk_count:
-            accepted_count = event.submissions.filter(
-                state=SubmissionStates.ACCEPTED
+        pending_state_submissions = event.submissions.filter(
+            pending_state__isnull=False
+        ).count()
+        if talk_count or accepted_count:
+            confirmed_count = event.submissions.filter(
+                state=SubmissionStates.CONFIRMED
             ).count()
             result["tiles"].append(
                 {
-                    "large": talk_count,
+                    # Don’t show 0 here for events that do not use the scheduling
+                    # component, instead show accepted + confirmed
+                    "large": talk_count or (accepted_count + confirmed_count),
                     "small": ngettext_lazy("session", "sessions", talk_count),
                     "url": event.orga_urls.submissions
                     + f"?state={SubmissionStates.ACCEPTED}&state={SubmissionStates.CONFIRMED}",
@@ -309,8 +313,7 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                         "color": "error" if accepted_count else "info",
                     },
                     "left": {
-                        "text": str(phrases.submission.submitted)
-                        + f": {submission_count}",
+                        "text": str(_("confirmed")) + f": {confirmed_count}",
                         "url": event.orga_urls.submissions,
                         "color": "success",
                     },
@@ -326,6 +329,26 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                     "priority": 60,
                 }
             )
+        if pending_state_submissions and pending_state_submissions > 0:
+            states = "&".join(
+                [
+                    f"state=pending_state__{state}"
+                    for state, __ in SubmissionStates.choices
+                    if state != SubmissionStates.DRAFT
+                ]
+            )
+            result["tiles"].append(
+                {
+                    "large": pending_state_submissions,
+                    "small": ngettext_lazy(
+                        "submission with pending changes",
+                        "submissions with pending changes",
+                        pending_state_submissions,
+                    ),
+                    "url": event.orga_urls.submissions + f"?{states}",
+                    "priority": 56,
+                }
+            )
         submitter_count = event.submitters.count()
         speaker_count = event.speakers.count()
         rejected_count = (
@@ -338,11 +361,11 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                 {
                     "large": speaker_count,
                     "small": ngettext_lazy("speaker", "speakers", speaker_count),
-                    "url": event.orga_urls.speakers + "?role=true",
+                    "url": event.orga_urls.speakers + "?role=speaker",
                     "priority": 56,
                     "right": {
                         "text": _("rejected") + f": {rejected_count}",
-                        "url": event.orga_urls.speakers + "?role=false",
+                        "url": event.orga_urls.speakers + "?role=submitter",
                         "color": "error",
                     },
                     "left": {
@@ -361,7 +384,7 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                     "priority": 60,
                 }
             )
-        count = event.queued_mails.filter(sent__isnull=False).count()
+        count = event.queued_mails.filter(state=QueuedMailStates.SENT).count()
         result["tiles"].append(
             {
                 "large": count,
@@ -370,6 +393,9 @@ class EventDashboardView(EventPermissionRequired, TemplateView):
                 "priority": 80,
             }
         )
-        result["tiles"] += self.get_review_tiles()
+        result["tiles"] += self.get_review_tiles(
+            can_change_settings=can_change_settings
+        )
+        result["tiles"] += self.get_plugin_tiles()
         result["tiles"].sort(key=lambda tile: tile.get("priority") or 100)
         return result

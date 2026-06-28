@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023-present Tobias Kunze
+// SPDX-License-Identifier: Apache-2.0
+
 let isFaved = false
 let eventSlug = null
 let submissionId = null
@@ -6,10 +9,28 @@ let loggedIn = false
 let apiBaseUrl = null
 let setupRun = false
 
+const getCookie = (name) => {
+    let cookieValue = null
+    if (document.cookie && document.cookie !== "") {
+        const cookies = document.cookie.split(";")
+        for (var i = 0; i < cookies.length; i++) {
+            let cookie = cookies[i].trim()
+            // Does this cookie string begin with the name we want?
+            if (cookie.substring(0, name.length + 1) === name + "=") {
+                cookieValue = decodeURIComponent(
+                    cookie.substring(name.length + 1),
+                )
+                break
+            }
+        }
+    }
+    return cookieValue
+}
+
 const spinStar = (star) => {
-    star.classList.add('fa-spin')
+    star.classList.add('animate-spin')
     setTimeout(() => {
-        star.classList.remove('fa-spin')
+        star.classList.remove('animate-spin')
     }, 400)
 }
 
@@ -43,7 +64,7 @@ const loadLocalFavs = () => {
 const apiFetch = async (path, method) => {
     const headers = {'Content-Type': 'application/json'}
     if (method === 'POST' || method === 'DELETE') {
-        headers['X-CSRFToken'] = document.cookie.split('pretalx_csrftoken=').pop().split(';').shift()
+        headers['X-CSRFToken'] = getCookie('pretalx_csrftoken')
     }
     const response = await fetch(apiBaseUrl + path, {
         method,
@@ -83,10 +104,9 @@ const toggleFavState = async () => {
 
 const pageSetup = async () => {
     setupRun = true
-    console.log('running page setup')
     eventSlug = window.location.pathname.split('/')[1]
     submissionId = window.location.pathname.split('/')[3]
-    loggedIn = document.querySelector('#pretalx-messages').dataset.loggedIn === 'true'
+    loggedIn = document.body.dataset.pretalxLoggedIn === 'true'
     apiBaseUrl = window.location.origin + '/api/events/' + eventSlug + '/'
 
     isFaved = await loadIsFaved()

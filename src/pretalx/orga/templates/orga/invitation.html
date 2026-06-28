@@ -1,8 +1,12 @@
 {% extends "orga/base.html" %}
-{% load bootstrap4 %}
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 {% load i18n %}
 
-{% block extra_title %}{% translate "Invitation" %} :: {{ invitation.team.name }} :: {% endblock extra_title %}
+{% block extra_title %}{% translate "Invitation" %} :: {{ invitation.team.name }} ::
+{% endblock extra_title %}
 {% block content %}
     <h2 class="col-md-6 ml-auto mr-auto">
         {% blocktranslate with organiser=invitation.team.organiser.name name=invitation.team.name trimmed %}
@@ -18,15 +22,20 @@
                 {% endblocktranslate %}
             </p>
             <p>
-                {% blocktranslate trimmed with domain=request.get_host %}
-                    If you already have an account – either as a speaker or an organiser – at <a href="{{ domain }}">{{ domain }}</a>, please log in now. Otherwise, create a new account to join the team!
-                {% endblocktranslate %}
+                {% with host=request.get_host %}
+                    {% blocktranslate trimmed with link='<a href="'|add:host|add:'">'|add:host|add:'</a>'|safe %}
+                        If you already have an account – either as a speaker or an organiser – at {{ link }}, please log
+                        in now. Otherwise, create a new account to join the team!
+                    {% endblocktranslate %}
+                {% endwith %}
             </p>
         </div>
         <hr>
 
-        {% include "common/auth.html" %}
-
+        <form method="post">
+            {% csrf_token %}
+            {{ form }}
+        </form>
     {% else %}
         <form method="post" class="col-md-6 ml-auto mr-auto">
             {% csrf_token %}
@@ -35,10 +44,17 @@
                 {% blocktranslate trimmed with name=invitation.team.name %}
                     You have been invited to join the organiser team {{ name }}.
                 {% endblocktranslate %}
-                {% blocktranslate trimmed with link=request.path %}
-                    To accept the invitation with the account you’re currently active, please use the button below. If you want to accept the invitation with a different account, you can <a href="/orga/logout/?next={{ link }}">log out</a> and log in with the other account.
-                    </p><p>
-                        If you believe to have received this invitation by mistake, please contact the organiser directly.
+                {% with link=request.path|urlencode %}
+                    {% blocktranslate trimmed with link_start='<a href="/orga/logout/?next='|add:link|add:'">'|safe link_end='</a>'|safe %}
+                        To accept the invitation with the account you’re currently active, please use the button below.
+                        If you want to accept the invitation with a different account, you can {{ link_start }}log
+                        out{{ link_end }} and log in with the other account.
+                    {% endblocktranslate %}
+                {% endwith %}
+            </p>
+            <p>
+                {% blocktranslate trimmed %}
+                    If you believe to have received this invitation by mistake, please contact the organiser directly.
                 {% endblocktranslate %}
             </p>
             <p></p>
@@ -47,5 +63,4 @@
             </button>
         </form>
     {% endif %}
-
 {% endblock content %}

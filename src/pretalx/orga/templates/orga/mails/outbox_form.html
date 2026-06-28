@@ -1,113 +1,142 @@
 {% extends "orga/mails/base.html" %}
-{% load bootstrap4 %}
-{% load i18n %}
-{% load rich_text %}
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% block extra_title %}{% translate "Mail Editor" %} :: {% endblock extra_title %}
+{% load history_sidebar %}
+{% load i18n %}
+{% load static %}
+
+{% block extra_title %}{% translate "Email editor" %} ::
+{% endblock extra_title %}
+
+{% block stylesheets %}
+    {{ block.super }}
+    <link rel="stylesheet" href="{% static 'orga/css/forms/i18n.css' %}">
+    <link rel="stylesheet" href="{% static 'orga/css/ui/history.css' %}">
+{% endblock stylesheets %}
+
+{% block scripts %}
+    {{ block.super }}
+    <script defer src="{% static 'common/js/ui/dialog.js' %}"></script>
+    <script defer src="{% static 'common/js/ui/history-dialog.js' %}"></script>
+{% endblock scripts %}
 
 {% block mail_content %}
-    {% if form.instance.sent %}
-        <div class="alert alert-info">
-            {% blocktranslate trimmed with timestamp=form.instance.sent %}
-                This email was sent on {{ timestamp }}.
-            {% endblocktranslate %}
-        </div>
-    {% endif %}
-    <form method="post">
-        {% csrf_token %}
-        <h2>{% translate "Mail Editor" %}</h2>
-        {% bootstrap_form_errors form %}
-
-        {% if not form.read_only %}
-            {% bootstrap_field form.to layout="event" %}
-            {% if form.to_users %}
-                {% bootstrap_field form.to_users layout="event" %}
-            {% endif %}
-            {% bootstrap_field form.reply_to layout="event" %}
-            {% bootstrap_field form.cc layout="event" %}
-            {% bootstrap_field form.bcc layout="event" %}
-            {% bootstrap_field form.subject layout="event" %}
-            {% bootstrap_field form.text layout="event" %}
-        {% else %}
-            <div class="d-flex flex-column">
-                <div class="row form-group">
-                    <div class="col col-md-3 flip text-right font-weight-bold">
-                        <div class="font-weight-bold">To</div>
-                    </div>
-                    <div class="col col-md-9">{{ form.instance.to|default:"-" }}</div>
+    <div class="form-history-container">
+        <div class="form-container">
+            {% if form.instance.sent %}
+                <div class="alert alert-info">
+                    {% blocktranslate trimmed with timestamp=form.instance.sent %}
+                        This email was sent on {{ timestamp }}.
+                    {% endblocktranslate %}
                 </div>
+            {% elif form.instance.has_error %}
+                <div class="alert alert-danger">
+                    <div>
+                        {% translate "This email failed to send:" %}
+                        {% if form.instance.error_data.smtp_code %}
+                            SMTP {{ form.instance.error_data.smtp_code }}{% else %}{{ form.instance.error_data.type }}
+                        {% endif %}
+                        {% if form.instance.error_data.error %}({{ form.instance.error_data.error }}){% endif %}
+                    </div>
+                </div>
+            {% endif %}
+            <form method="post">
+                {% csrf_token %}
+                <h2>{% translate "Email editor" %}</h2>
 
-                {% if form.to_users %}
-                    <div class="row form-group">
-                        <div class="col col-md-3 flip text-right font-weight-bold">
-                            <div class="font-weight-bold">To Users</div>
+                {% if not form.read_only %}
+                    {{ form }}
+                    {% for extra_form in extra_forms %}
+                        <fieldset>
+                            {% if extra_form.label %}<legend>{{ extra_form.label }}</legend>{% endif %}
+                            {{ extra_form }}
+                        </fieldset>
+                    {% endfor %}
+                    {% include "orga/includes/submit_row.html" %}
+                {% else %}
+                    <div class="d-flex flex-column">
+                        <div class="row form-group">
+                            <label class="col col-md-3 col-form-label">To</label>
+                            <div class="col col-md-9 mt-2">{{ form.instance.to|default:"-" }}</div>
                         </div>
-                        <div class="col col-md-9">
-                            {% for user in form.instance.to_users.all %}
-                                {% if user in request.event.submitters %}
-                                    <a href="{% url "orga:speakers.view" event=request.event.slug code=user.code %}">{{ user }}</a>
-                                {% else %}
-                                    {{ user }}{% endif %}{% if not forloop.last %},
-                                    {% endif %}
-                            {% endfor %}
+
+                        {% if form.to_users %}
+                            <div class="row form-group">
+                                <label class="col col-md-3 col-form-label">To Users</label>
+                                <div class="col col-md-9 mt-2">
+                                    {% for user in form.instance.to_users.all %}
+                                        {% if user.speaker_code %}
+                                            <a
+                                                href="{% url 'orga:speakers.view' event=request.event.slug code=user.speaker_code %}"
+                                            >{{ user }}</a>
+                                        {% else %}
+                                            {{ user }}{% endif %}{% if not forloop.last %},
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+
+                        <div class="row form-group">
+                            <label class="col col-md-3 col-form-label">Reply-To</label>
+                            <div class="col col-md-9 mt-2">{{ form.instance.reply_to|default:"-" }}</div>
                         </div>
+
+                        <div class="row form-group">
+                            <label class="col col-md-3 col-form-label">CC</label>
+                            <div class="col col-md-9 mt-2">{{ form.instance.cc|default:"-" }}</div>
+                        </div>
+
+                        <div class="row form-group">
+                            <label class="col col-md-3 col-form-label">BCC</label>
+                            <div class="col col-md-9 mt-2">{{ form.instance.bcc|default:"-" }}</div>
+                        </div>
+
+                        <div class="row form-group">
+                            <label class="col col-md-3 col-form-label">Subject</label>
+                            <div class="col col-md-9 mt-2">{{ form.instance.subject }}</div>
+                        </div>
+
+                        <div class="row form-group">
+                            <label class="col col-md-3 col-form-label">Text</label>
+                            <div class="col col-md-9 mt-2">{{ form.instance.body_html }}</div>
+                        </div>
+                    </div>
+
+                    {% for extra_form in extra_forms %}
+                        <fieldset>
+                            {% if extra_form.label %}<legend>{{ extra_form.label }}</legend>{% endif %}
+                            {{ extra_form }}
+                        </fieldset>
+                    {% endfor %}
+                {% endif %}
+            </form>
+            {% if copy_to_draft_url %}
+                {% if copy_to_draft_method == "post" %}
+                    <form method="post" action="{{ copy_to_draft_url }}" class="submit-group flex-row-reverse">
+                        {% csrf_token %}
+                        <span>
+                            <button type="submit" class="btn btn-lg btn-success">
+                                {% translate "Copy to draft" %}
+                            </button>
+                        </span>
+                    </form>
+                {% else %}
+                    <div class="submit-group flex-row-reverse">
+                        <span>
+                            <a href="{{ copy_to_draft_url }}" class="btn btn-lg btn-success">
+                                {% translate "Copy to draft" %}
+                            </a>
+                        </span>
                     </div>
                 {% endif %}
-
-                <div class="row form-group">
-                    <div class="col col-md-3 flip text-right font-weight-bold">
-                        <div class="font-weight-bold">Reply-To</div>
-                    </div>
-                    <div class="col col-md-9">{{ form.instance.reply_to|default:"-" }}</div>
-                </div>
-
-                <div class="row form-group">
-                    <div class="col col-md-3 flip text-right font-weight-bold">
-                        <div class="font-weight-bold">CC</div>
-                    </div>
-                    <div class="col col-md-9">{{ form.instance.cc|default:"-" }}</div>
-                </div>
-
-                <div class="row form-group">
-                    <div class="col col-md-3 flip text-right font-weight-bold">
-                        <div class="font-weight-bold">BCC</div>
-                    </div>
-                    <div class="col col-md-9">{{ form.instance.bcc|default:"-" }}</div>
-                </div>
-
-                <div class="row form-group">
-                    <div class="col col-md-3 flip text-right font-weight-bold">
-                        <div class="font-weight-bold">Subject</div>
-                    </div>
-                    <div class="col col-md-9">{{ form.instance.subject }}</div>
-                </div>
-
-                <div class="row form-group">
-                    <div class="col col-md-3 flip text-right font-weight-bold">
-                        <div class="font-weight-bold">Text</div>
-                    </div>
-                    <div class="col col-md-9">{{ form.instance.text|rich_text }}</div>
-                </div>
-            </div>
-        {% endif %}
-
-        <div class="submit-group">
-            {% if action == "edit" %}
-                <a class="btn btn-lg btn-danger ml-1 mr-1" href={{ form.instance.urls.delete }}>{% translate "Discard" %}</a>
-                <a class="btn btn-lg btn-outline-danger flip mr-auto" href="{{ form.instance.urls.delete }}?all">{% translate "Discard all from this template" %}</a>
-                <span></span>
-                <button type="submit" class="btn btn-lg btn-success" name="form" value="save">
-                    {{ phrases.base.save }}
-                </button>
-                <button class="btn btn-lg btn-info" name="form" value="send">{% translate "Save and send" %}</button>
-            {% elif action == "view" %}
-                {% if form.instance.sent %}
-                    <a class="btn btn-lg btn-success ml-auto flip" href="{% if form.instance.template %}{{ request.event.orga_urls.compose_mails_sessions }}?template={{ form.instance.template.pk }}{% else %}{{ form.instance.urls.copy }}{% endif %}">
-                        {% translate "Copy to draft" %}
-                    </a>
-                {% endif %}
             {% endif %}
         </div>
-    </form>
-
+        <div class="sidebar-container mt-4 pt-4">
+            {% history_sidebar form.instance %}
+        </div>
+    </div>
 {% endblock mail_content %}

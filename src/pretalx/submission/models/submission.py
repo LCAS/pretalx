@@ -1,129 +1,111 @@
-import datetime as dt
-import json
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: Florian Moesch
+# SPDX-FileContributor: Raphael Michel
+# SPDX-FileContributor: luto
+
 import statistics
-from itertools import repeat
 
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.validators import MinValueValidator
 from django.db import models
-from django.db.models.fields.files import FieldFile
 from django.utils.crypto import get_random_string
 from django.utils.functional import cached_property
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
-from django.utils.translation import pgettext_lazy
 from django_scopes import ScopedManager
 
-from pretalx.common.exceptions import SubmissionError
-from pretalx.common.models.choices import Choices
+from pretalx.agenda import rules as agenda_rules
+from pretalx.common.models.fields import MarkdownField
 from pretalx.common.models.mixins import GenerateCode, PretalxModel
-from pretalx.common.text.path import path_with_hash
+from pretalx.common.text.path import hashed_path
 from pretalx.common.text.phrases import phrases
 from pretalx.common.text.serialize import serialize_duration
 from pretalx.common.urls import EventUrls
-from pretalx.mail.models import MailTemplate, QueuedMail
-from pretalx.submission.signals import submission_state_change
+from pretalx.person.rules import is_reviewer
+from pretalx.schedule.models.availability import Availability
+from pretalx.submission import rules
+from pretalx.submission.enums import (
+    AttendeeSignupStates,
+    SignupStatus,
+    SubmissionStates,
+)
+from pretalx.submission.validators.submission import validate_signup_required
 
 
 def generate_invite_code(length=32):
-    return get_random_string(length=length, allowed_chars=Submission._code_charset)
+    return get_random_string(length=length, allowed_chars=Submission.code_charset)
 
 
 def submission_image_path(instance, filename):
-    return (
-        f"{instance.event.slug}/submissions/{instance.code}/{path_with_hash(filename)}"
+    return hashed_path(
+        filename,
+        target_name="image",
+        upload_dir=f"{instance.event.slug}/submissions/{instance.code}/",
     )
 
 
-class SubmissionStates(Choices):
-    SUBMITTED = "submitted"
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
-    CONFIRMED = "confirmed"
-    CANCELED = "canceled"
-    WITHDRAWN = "withdrawn"
-    DELETED = "deleted"
-    DRAFT = "draft"
-
-    display_values = {
-        SUBMITTED: pgettext_lazy("proposal status", "submitted"),
-        ACCEPTED: _("accepted"),
-        CONFIRMED: _("confirmed"),
-        REJECTED: _("rejected"),
-        CANCELED: _("canceled"),
-        WITHDRAWN: _("withdrawn"),
-        DELETED: _("deleted"),
-        DRAFT: _("draft"),
-    }
-    valid_choices = [(key, value) for key, value in display_values.items()]
-
-    valid_next_states = {
-        SUBMITTED: (REJECTED, WITHDRAWN, ACCEPTED),
-        REJECTED: (ACCEPTED, SUBMITTED),
-        ACCEPTED: (CONFIRMED, CANCELED, REJECTED, SUBMITTED, WITHDRAWN),
-        CONFIRMED: (ACCEPTED, CANCELED),
-        CANCELED: (ACCEPTED, CONFIRMED),
-        WITHDRAWN: (SUBMITTED),
-        DELETED: (),
-        DRAFT: (SUBMITTED,),
-    }
-
-    method_names = {
-        SUBMITTED: "make_submitted",
-        REJECTED: "reject",
-        ACCEPTED: "accept",
-        CONFIRMED: "confirm",
-        CANCELED: "cancel",
-        WITHDRAWN: "withdraw",
-        DELETED: "remove",
-    }
-
-    accepted_states = (ACCEPTED, CONFIRMED)
-
-
-class SubmissionManager(models.Manager):
-    def get_queryset(self):
-        return (
-            super()
-            .get_queryset()
-            .exclude(state=SubmissionStates.DELETED)
-            .exclude(state=SubmissionStates.DRAFT)
+class SubmissionQuerySet(models.QuerySet):
+    def with_sorted_speakers(self):
+        from pretalx.submission.domain.queries.submission import (  # noqa: PLC0415 -- thin method
+            sorted_speakers_prefetch,
         )
 
+        return self.prefetch_related(sorted_speakers_prefetch())
 
-class DeletedSubmissionManager(models.Manager):
+
+class SubmissionManager(models.Manager.from_queryset(SubmissionQuerySet)):
     def get_queryset(self):
-        return super().get_queryset().filter(state=SubmissionStates.DELETED)
+        return super().get_queryset().exclude(state=SubmissionStates.DRAFT)
 
 
-class AllSubmissionManager(models.Manager):
+class AllSubmissionManager(models.Manager.from_queryset(SubmissionQuerySet)):
     pass
+
+
+class SpeakerRole(models.Model):
+    """Through model connecting speaker and submission."""
+
+    submission = models.ForeignKey(
+        to="submission.Submission",
+        on_delete=models.CASCADE,
+        related_name="speaker_roles",
+    )
+    speaker = models.ForeignKey(
+        to="person.SpeakerProfile",
+        on_delete=models.CASCADE,
+        related_name="speaker_roles",
+    )
+    position = models.PositiveIntegerField(default=0)
+
+    objects = ScopedManager(event="submission__event")
+
+    class Meta:
+        ordering = ("position",)
+        unique_together = (("submission", "speaker"),)
+
+    def __str__(self):
+        return f"SpeakerRole(submission={self.submission.code}, speaker={self.speaker})"
 
 
 class Submission(GenerateCode, PretalxModel):
     """Submissions are, next to :class:`~pretalx.event.models.event.Event`, the
     central model in pretalx.
 
-    A submission, which belongs to exactly one event, can have multiple
-    speakers and a lot of other related data, such as a
-    :class:`~pretalx.submission.models.type.SubmissionType`, a
-    :class:`~pretalx.submission.models.track.Track`, multiple
-    :class:`~pretalx.submission.models.question.Answer` objects, and so on.
-
-    :param code: The unique alphanumeric identifier used to refer to a
-        submission.
-    :param state: The submission can be 'submitted', 'accepted', 'confirmed',
-        'rejected', 'withdrawn', or 'canceled'. State changes should be done via
-        the corresponding methods, like ``accept()``. The ``SubmissionStates``
-        class comes with a ``method_names`` dictionary for method lookup.
-    :param image: An image illustrating the talk or topic.
-    :param review_code: A token used in secret URLs giving read-access to the
-        submission.
+    State changes must go through :func:`pretalx.submission.domain.submission.set_submission_state`,
+    which is called by the ``accept()``, ``reject()`` etc model methods.
     """
 
     code = models.CharField(max_length=16, unique=True)
     speakers = models.ManyToManyField(
-        to="person.User", related_name="submissions", blank=True
+        to="person.SpeakerProfile",
+        related_name="submissions",
+        through=SpeakerRole,
+        blank=True,
+        verbose_name=_("Speakers"),
     )
     event = models.ForeignKey(
         to="event.Event", on_delete=models.PROTECT, related_name="submissions"
@@ -144,13 +126,11 @@ class Submission(GenerateCode, PretalxModel):
         blank=True,
     )
     tags = models.ManyToManyField(
-        to="submission.Tag",
-        related_name="submissions",
-        verbose_name=_("Tags"),
+        to="submission.Tag", related_name="submissions", verbose_name=_("Tags")
     )
     state = models.CharField(
         max_length=SubmissionStates.get_max_length(),
-        choices=SubmissionStates.get_choices(),
+        choices=SubmissionStates.choices,
         default=SubmissionStates.SUBMITTED,
         verbose_name=_("Proposal state"),
     )
@@ -158,54 +138,53 @@ class Submission(GenerateCode, PretalxModel):
         null=True,
         blank=True,
         max_length=SubmissionStates.get_max_length(),
-        choices=SubmissionStates.get_choices(),
+        choices=SubmissionStates.choices,
         default=None,
         verbose_name=_("Pending proposal state"),
     )
-    abstract = models.TextField(
-        null=True,
-        blank=True,
-        verbose_name=_("Abstract"),
-        help_text=phrases.base.use_markdown,
-    )
-    description = models.TextField(
-        null=True,
-        blank=True,
-        verbose_name=_("Description"),
-        help_text=phrases.base.use_markdown,
-    )
-    notes = models.TextField(
+    abstract = MarkdownField(null=True, blank=True, verbose_name=_("Abstract"))
+    description = MarkdownField(null=True, blank=True, verbose_name=_("Description"))
+    notes = MarkdownField(
         null=True,
         blank=True,
         verbose_name=_("Notes"),
         help_text=_(
-            "These notes are meant for the organiser and won’t be made public."
+            "These notes are meant for the organisers and won’t be made public."
         ),
     )
     internal_notes = models.TextField(
         null=True,
         blank=True,
-        verbose_name=_("Internal notes"),
-        help_text=_(
-            "Internal notes for other organisers/reviewers. Not visible to the speakers or the public."
-        ),
+        verbose_name=phrases.base.internal_notes,
+        help_text=phrases.base.internal_notes_help,
     )
     duration = models.PositiveIntegerField(
         null=True,
         blank=True,
         verbose_name=_("Duration"),
-        help_text=_("The duration in minutes."),
+        help_text=_("Duration in minutes"),
     )
     slot_count = models.IntegerField(
         default=1,
-        verbose_name=_("Slot Count"),
-        help_text=_("How many times this session will take place."),
+        verbose_name=_("Slot count"),
+        help_text=_("How often this session takes place."),
+        validators=[MinValueValidator(1)],
+    )
+    attendee_signup_required = models.BooleanField(
+        null=True,  # None means that the track and submission_type settings are used
+        blank=True,
+        verbose_name=_("Requires signup"),
+        help_text=_("Override whether attendees must sign up to attend this session."),
+    )
+    attendee_signup_capacity = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        verbose_name=_("Attendee capacity"),
+        help_text=_("Override the room capacity for this session."),
         validators=[MinValueValidator(1)],
     )
     content_locale = models.CharField(
-        max_length=32,
-        default=settings.LANGUAGE_CODE,
-        verbose_name=_("Language"),
+        max_length=32, default=settings.LANGUAGE_CODE, verbose_name=_("Language")
     )
     is_featured = models.BooleanField(
         default=False,
@@ -219,7 +198,7 @@ class Submission(GenerateCode, PretalxModel):
         blank=True,
         upload_to=submission_image_path,
         verbose_name=_("Session image"),
-        help_text=_("Use this if you want an illustration to go with your proposal."),
+        help_text=phrases.base.image_help,
     )
     invitation_token = models.CharField(max_length=32, default=generate_invite_code)
     access_code = models.ForeignKey(
@@ -232,7 +211,12 @@ class Submission(GenerateCode, PretalxModel):
     review_code = models.CharField(
         max_length=32, unique=True, null=True, blank=True, default=generate_invite_code
     )
-    anonymised_data = models.TextField(null=True, blank=True, default="{}")
+    anonymised = models.JSONField(null=True, blank=True)
+    # Emails the speaker entered into the wizard's "additional_speaker" field
+    # while the proposal is still a DRAFT. Promoted to real
+    # ``SubmissionInvitation`` rows when the proposal is submitted; not
+    # exposed outside the draft → submit transition.
+    draft_additional_speakers = models.JSONField(default=list, blank=True)
     assigned_reviewers = models.ManyToManyField(
         verbose_name=_("Assigned reviewers"),
         to="person.User",
@@ -241,10 +225,55 @@ class Submission(GenerateCode, PretalxModel):
     )
 
     objects = ScopedManager(event="event", _manager_class=SubmissionManager)
-    deleted_objects = ScopedManager(
-        event="event", _manager_class=DeletedSubmissionManager
-    )
     all_objects = ScopedManager(event="event", _manager_class=AllSubmissionManager)
+
+    log_prefix = "pretalx.submission"
+
+    @property
+    def log_parent(self):
+        return self.event
+
+    class Meta:
+        rules_permissions = {
+            "list": agenda_rules.is_agenda_visible
+            | rules.orga_can_change_submissions
+            | is_reviewer,
+            "list_featured": agenda_rules.are_featured_submissions_visible
+            | rules.orga_can_change_submissions,
+            "view": agenda_rules.is_agenda_submission_visible
+            | rules.is_speaker
+            | rules.orga_can_change_submissions
+            | rules.has_reviewer_access,
+            "view_public": agenda_rules.is_agenda_submission_visible
+            | rules.orga_can_change_submissions,
+            "orga_list": rules.orga_can_change_submissions | is_reviewer,
+            "orga_update": rules.orga_can_change_submissions,
+            "review": rules.has_reviewer_access & rules.can_be_reviewed,
+            "view_reviews": rules.has_reviewer_access
+            | rules.orga_can_change_submissions,
+            "view_all_reviews": (rules.has_reviewer_access & rules.can_view_reviews)
+            | rules.orga_can_change_submissions,
+            "create": rules.orga_can_change_submissions,
+            "update": (rules.can_be_edited & rules.is_speaker)
+            | rules.orga_can_change_submissions,
+            "delete": rules.orga_can_change_submissions,
+            "state_change": rules.orga_or_reviewer_can_change_submission,
+            "accept_or_reject": rules.orga_or_reviewer_can_change_submission,
+            "withdraw": rules.can_be_withdrawn & rules.is_speaker,
+            "confirm": rules.can_be_confirmed
+            & (rules.is_speaker | rules.orga_can_change_submissions),
+            "remove": rules.can_be_removed & rules.orga_can_change_submissions,
+            "view_feedback_page": agenda_rules.event_uses_feedback
+            & agenda_rules.is_agenda_submission_visible,
+            "view_scheduling_details": agenda_rules.is_submission_visible_via_schedule,
+            "view_feedback": rules.is_speaker
+            | rules.has_reviewer_access
+            | rules.orga_can_change_submissions,
+            "give_feedback": agenda_rules.is_agenda_submission_visible
+            & rules.is_feedback_ready,
+            "is_speaker": rules.is_speaker,
+            "add_speaker": rules.can_be_edited & rules.can_request_speakers,
+        }
 
     class urls(EventUrls):
         user_base = "{self.event.urls.user_submissions}{self.code}/"
@@ -254,10 +283,13 @@ class Submission(GenerateCode, PretalxModel):
         public_base = "{self.event.urls.base}talk/{self.code}"
         public = "{public_base}/"
         feedback = "{public}feedback/"
+        signup = "{public}signup/"
+        signup_cancel = "{public}signup/cancel/"
         social_image = "{public}og-image"
         ical = "{public_base}.ics"
         image = "{self.image_url}"
         invite = "{user_base}invite"
+        retract_invitation = "{user_base}retract-invitation"
         accept_invitation = (
             "{self.event.urls.base}invitation/{self.code}/{self.invitation_token}"
         )
@@ -274,331 +306,151 @@ class Submission(GenerateCode, PretalxModel):
         cancel = "{base}cancel"
         speakers = "{base}speakers/"
         delete_speaker = "{speakers}delete"
+        reorder_speakers = "{speakers}reorder"
+        retract_invitation = "{speakers}invitation/retract"
         reviews = "{base}reviews/"
         feedback = "{base}feedback/"
         toggle_featured = "{base}toggle_featured"
+        apply_pending = "{base}apply_pending"
         anonymise = "{base}anonymise/"
+        comments = "{base}comments/"
         quick_schedule = "{self.event.orga_urls.schedule}quick/{self.code}/"
+        history = "{base}history/"
+        signup = "{base}signup/"
 
     @property
     def image_url(self):
         return self.image.url if self.image else ""
 
     @cached_property
-    def cfp_open(self):
-        deadline = self.submission_type.deadline or self.event.cfp.deadline
-        return (not deadline) or now() <= deadline
+    def editable(self) -> bool:
+        """
+        Checks if the speaker is currently allowed to edit the submission.
+        """
+        try:
+            event = self.event
+        except ObjectDoesNotExist:
+            # Unsaved submissions can always be edited
+            return True
+        deadline = self.submission_type.deadline or event.cfp.deadline
+        deadline_open = (not deadline) or now() <= deadline
 
-    @cached_property
-    def editable(self):
-        if self.state == SubmissionStates.SUBMITTED:
-            return self.cfp_open or (
-                self.event.active_review_phase
-                and self.event.active_review_phase.speakers_can_change_submissions
-            )
         if self.state == SubmissionStates.DRAFT:
-            return self.cfp_open
+            # We have to check if we comply with the standard submission requirements if
+            # we are in a draft state, as drafts should only be editable when they could
+            # also be submitted.
+            # For existing drafts with access codes, we ignore the redemption count
+            # since the code was already redeemed when creating the draft.
+            access_code = (
+                self.access_code
+                if (self.access_code and self.access_code.time_valid)
+                else None
+            )
+            if (self.track and self.track.requires_access_code) and not access_code:
+                return False
+            if self.submission_type.requires_access_code and not access_code:
+                return False
+
+            # We are not missing an access code, so we can just check if we hit the
+            # deadline or can ignore it safely
+            return bool(deadline_open or access_code)
+
+        if not event.get_feature_flag("speakers_can_edit_submissions"):
+            return False
+
+        if self.state == SubmissionStates.SUBMITTED:
+            return deadline_open or (
+                event.active_review_phase
+                and event.active_review_phase.speakers_can_change_submissions
+            )
         return self.state in SubmissionStates.accepted_states
 
-    @property
-    def anonymised(self):
-        try:
-            result = json.loads(self.anonymised_data)
-        except Exception:
-            result = None
-        if not result or not isinstance(result, dict):
-            return {}
-        return result
+    @cached_property
+    def public_review_link_active(self) -> bool:
+        return (
+            bool(self.review_code)
+            and self.state in SubmissionStates.public_review_states
+            and self.event.get_feature_flag("submission_public_review")
+        )
 
     @property
-    def is_anonymised(self):
+    def is_anonymised(self) -> bool:
         if self.anonymised:
-            return self.anonymised.get("_anonymised", False)
+            return bool(self.anonymised.get("_anonymised", False))
         return False
 
-    @property
+    def get_anonymised(self, attribute):
+        if self.is_anonymised and attribute in self.anonymised:
+            return self.anonymised[attribute]
+        return getattr(self, attribute, None)
+
+    @cached_property
     def reviewer_answers(self):
         return self.answers.filter(question__is_visible_to_reviewers=True).order_by(
             "question__position"
         )
 
-    def get_duration(self) -> int:
-        """Returns this submission's duration in minutes.
+    @cached_property
+    def public_answers(self):
+        from pretalx.submission.domain.queries.question import (  # noqa: PLC0415 -- thin method
+            public_answers_for_submission,
+        )
 
-        Falls back to the
-        :class:`~pretalx.submission.models.type.SubmissionType`'s default
-        duration if none is set on the submission.
-        """
-        if self.duration is None:
+        return public_answers_for_submission(self)
+
+    def get_duration(self) -> int:
+        if self.duration is None:  # We permit zero-length duration
             return self.submission_type.default_duration
         return self.duration
 
-    def update_duration(self):
-        """Apply the submission's duration to its currently scheduled.
+    def clean(self):
+        super().clean()
+        # The model field default is settings.LANGUAGE_CODE, which can disagree
+        # with the event's locale (e.g. a German event on a server defaulting to
+        # English). Forms/serializers may not surface the field at all when the
+        # event has a single content locale, so the fallback lives on the model.
+        if self.event_id and self.content_locale not in self.event.content_locales:
+            self.content_locale = self.event.locale
+        validate_signup_required(self, self.attendee_signup_required)
 
-        :class:`~pretalx.schedule.models.slot.TalkSlot`.
+    def get_instance_data(self):
+        data = super().get_instance_data()
 
-        Should be called whenever the duration changes.
-        """
-        for slot in self.event.wip_schedule.talks.filter(
-            submission=self, start__isnull=False
-        ):
-            slot.end = slot.start + dt.timedelta(minutes=self.get_duration())
-            slot.save()
+        if not self._state.adding:
+            lines = [line for r in self.resources.all() if (line := r.as_markdown)]
+            if lines:
+                data["resources"] = "\n".join(f"- {line}" for line in lines)
+            tags = list(self.tags.values_list("tag", flat=True)) or []
+            data["tags"] = "\n".join(f"- {tag}" for tag in tags)
 
-    update_duration.alters_data = True
+        return data
 
-    def update_review_scores(self):
-        """Apply the submission's calculated review scores.
-
-        Should be called whenever the tracks of a submission change.
-        """
-        for review in self.reviews.all():
-            review.save(update_score=True)
-
-    def _set_state(self, new_state, force=False, person=None):
-        """Check if the new state is valid for this Submission (based on
-        SubmissionStates.valid_next_states).
-
-        If yes, set it and save the object. if no, raise a
-        SubmissionError with a helpful message.
-        """
-        valid_next_states = SubmissionStates.valid_next_states.get(self.state, [])
-
-        if self.state == new_state:
-            self.pending_state = None
-            self.save(update_fields=["state", "pending_state"])
-            self.update_talk_slots()
-            return
-        if force or new_state in valid_next_states:
-            old_state = self.state
-            self.state = new_state
-            self.pending_state = None
-            if new_state in (
-                SubmissionStates.REJECTED,
-                SubmissionStates.DELETED,
-                SubmissionStates.CANCELED,
-                SubmissionStates.WITHDRAWN,
-            ):
-                self.is_featured = False
-            self.save(update_fields=["state", "pending_state"])
-            self.update_talk_slots()
-            submission_state_change.send_robust(
-                self.event, submission=self, old_state=old_state, user=person
-            )
-        else:
-            source_states = (
-                src
-                for src, dsts in SubmissionStates.valid_next_states.items()
-                if new_state in dsts
-            )
-
-            # build an error message mentioning all states, which are valid source states for the desired new state.
-            trans_or = pgettext_lazy(
-                'used in talk confirm/accept/reject/...-errors, like "... must be accepted OR foo OR bar ..."',
-                " or ",
-            )
-            state_names = dict(SubmissionStates.get_choices())
-            source_states = trans_or.join(
-                str(state_names[state]) for state in source_states
-            )
-            raise SubmissionError(
-                _(
-                    "Proposal must be {src_states} not {state} to be {new_state}."
-                ).format(
-                    src_states=source_states, state=self.state, new_state=new_state
-                )
-            )
-
-    def update_talk_slots(self):
-        """Makes sure the correct amount of.
-
-        :class:`~pretalx.schedule.models.slot.TalkSlot` objects exists.
-
-        After an update or state change, talk slots should either be all
-        deleted, or all created, or the number of talk slots might need
-        to be adjusted.
-        """
-        from pretalx.schedule.models import TalkSlot
-
-        scheduling_allowed = (
-            self.state in SubmissionStates.accepted_states
-            or self.pending_state in SubmissionStates.accepted_states
+    def confirm(self, person=None, orga: bool = False):
+        from pretalx.submission.domain.submission import (  # noqa: PLC0415 -- thin method
+            set_submission_state,
         )
 
-        if not scheduling_allowed:
-            TalkSlot.objects.filter(
-                submission=self, schedule=self.event.wip_schedule
-            ).delete()
-            return
-
-        slot_count_current = TalkSlot.objects.filter(
-            submission=self,
-            schedule=self.event.wip_schedule,
-        ).count()
-        diff = slot_count_current - self.slot_count
-
-        if diff > 0:
-            # We build a list of all IDs to delete as .delete() doesn't work on sliced querysets.
-            # We delete unscheduled talks first.
-            talks_to_delete = (
-                TalkSlot.objects.filter(
-                    submission=self,
-                    schedule=self.event.wip_schedule,
-                )
-                .order_by("start", "room", "is_visible")[:diff]
-                .values_list("id", flat=True)
-            )
-            TalkSlot.objects.filter(pk__in=list(talks_to_delete)).delete()
-        elif diff < 0:
-            for __ in repeat(None, abs(diff)):
-                TalkSlot.objects.create(
-                    submission=self,
-                    schedule=self.event.wip_schedule,
-                )
-        TalkSlot.objects.filter(
-            submission=self, schedule=self.event.wip_schedule
-        ).update(is_visible=self.state == SubmissionStates.CONFIRMED)
-
-    update_talk_slots.alters_data = True
-
-    def send_initial_mails(self, person):
-        self.event.ack_template.to_mail(
-            user=person,
-            event=self.event,
-            context_kwargs={
-                "user": person,
-                "submission": self,
-            },
-            skip_queue=True,
-            commit=True,  # Send immediately, but save a record
-            locale=self.get_email_locale(person.locale),
-            full_submission_content=True,
-        )
-        if self.event.mail_settings["mail_on_new_submission"]:
-            MailTemplate(
-                event=self.event,
-                subject=str(_("New proposal")) + f": {self.title}",
-                text=self.event.settings.mail_text_new_submission,
-            ).to_mail(
-                user=self.event.email,
-                event=self.event,
-                context_kwargs={
-                    "user": person,
-                    "submission": self,
-                },
-                context={"orga_url": self.orga_urls.base.full()},
-                skip_queue=True,
-                commit=False,  # Send immediately, don't save a record
-                locale=self.event.locale,
-            )
-
-    def make_submitted(
-        self,
-        person=None,
-        force: bool = False,
-        orga: bool = False,
-        from_pending: bool = False,
-    ):
-        """Sets the submission's state to 'submitted'."""
-        previous = self.state
-        self._set_state(SubmissionStates.SUBMITTED, force, person=person)
-        if previous == SubmissionStates.DRAFT and person:
-            self.send_initial_mails(person=person)
-        else:
-            self.log_action(
-                "pretalx.submission.make_submitted",
-                person=person,
-                orga=orga,
-                data={"previous": previous, "from_pending": from_pending},
-            )
-
-    make_submitted.alters_data = True
-
-    def confirm(
-        self,
-        person=None,
-        force: bool = False,
-        orga: bool = False,
-        from_pending: bool = False,
-    ):
-        """Sets the submission's state to 'confirmed'."""
-        previous = self.state
-        self._set_state(SubmissionStates.CONFIRMED, force, person=person)
-        self.log_action(
-            "pretalx.submission.confirm",
-            person=person,
-            orga=orga,
-            data={"previous": previous, "from_pending": from_pending},
-        )
+        set_submission_state(self, SubmissionStates.CONFIRMED, person=person, orga=orga)
 
     confirm.alters_data = True
 
-    def accept(
-        self,
-        person=None,
-        force: bool = False,
-        orga: bool = True,
-        from_pending: bool = False,
-    ):
-        """Sets the submission's state to 'accepted'.
-
-        Creates an acceptance :class:`~pretalx.mail.models.QueuedMail`
-        unless the submission was previously confirmed.
-        """
-        previous = self.state
-        self._set_state(SubmissionStates.ACCEPTED, force, person=person)
-        self.log_action(
-            "pretalx.submission.accept",
-            person=person,
-            orga=True,
-            data={"previous": previous, "from_pending": from_pending},
+    def accept(self, person=None, orga: bool = True):
+        from pretalx.submission.domain.submission import (  # noqa: PLC0415 -- thin method
+            set_submission_state,
         )
 
-        if previous not in (SubmissionStates.ACCEPTED, SubmissionStates.CONFIRMED):
-            self.send_state_mail()
+        set_submission_state(self, SubmissionStates.ACCEPTED, person=person, orga=orga)
 
     accept.alters_data = True
 
-    def reject(
-        self,
-        person=None,
-        force: bool = False,
-        orga: bool = True,
-        from_pending: bool = False,
-    ):
-        """Sets the submission's state to 'rejected' and creates a rejection.
-
-        :class:`~pretalx.mail.models.QueuedMail`.
-        """
-        previous = self.state
-        self._set_state(SubmissionStates.REJECTED, force, person=person)
-        self.log_action(
-            "pretalx.submission.reject",
-            person=person,
-            orga=True,
-            data={"previous": previous, "from_pending": from_pending},
+    def reject(self, person=None, orga: bool = True):
+        from pretalx.submission.domain.submission import (  # noqa: PLC0415 -- thin method
+            set_submission_state,
         )
 
-        if previous != SubmissionStates.REJECTED:
-            self.send_state_mail()
+        set_submission_state(self, SubmissionStates.REJECTED, person=person, orga=orga)
 
     reject.alters_data = True
-
-    def apply_pending_state(self, person=None, force: bool = False):
-        if not self.pending_state:
-            return
-
-        if self.pending_state == self.state:
-            self.pending_state = None
-            self.save()
-            return
-
-        getattr(self, SubmissionStates.method_names[self.pending_state])(
-            force=force, person=person, from_pending=True
-        )
-
-    apply_pending_state.alters_data = True
 
     def get_email_locale(self, fallback=None):
         if self.content_locale in self.event.locales:
@@ -608,93 +460,28 @@ class Submission(GenerateCode, PretalxModel):
         return self.event.locale
 
     def get_content_locale_display(self):
-        return str(dict(self.event.named_content_locales)[self.content_locale])
+        locale_names = dict(self.event.named_content_locales)
+        if self.content_locale not in locale_names:
+            locale_names = dict(self.event.available_content_locales)
+        return str(locale_names.get(self.content_locale, self.content_locale))
 
-    def send_state_mail(self):
-        if self.state == SubmissionStates.ACCEPTED:
-            template = self.event.accept_template
-        elif self.state == SubmissionStates.REJECTED:
-            template = self.event.reject_template
-        else:
-            return
-
-        for speaker in self.speakers.all():
-            template.to_mail(
-                user=speaker,
-                locale=self.get_email_locale(speaker.locale),
-                context_kwargs={"submission": self, "user": speaker},
-                event=self.event,
-            )
-
-    send_state_mail.alters_data = True
-
-    def cancel(
-        self,
-        person=None,
-        force: bool = False,
-        orga: bool = True,
-        from_pending: bool = False,
-    ):
-        """Sets the submission's state to 'canceled'."""
-        previous = self.state
-        self._set_state(SubmissionStates.CANCELED, force, person=person)
-        self.log_action(
-            "pretalx.submission.cancel",
-            person=person,
-            orga=True,
-            data={"previous": previous, "from_pending": from_pending},
+    def cancel(self, person=None, orga: bool = True):
+        from pretalx.submission.domain.submission import (  # noqa: PLC0415 -- thin method
+            set_submission_state,
         )
+
+        set_submission_state(self, SubmissionStates.CANCELED, person=person, orga=orga)
 
     cancel.alters_data = True
 
-    def withdraw(
-        self,
-        person=None,
-        force: bool = False,
-        orga: bool = False,
-        from_pending: bool = False,
-    ):
-        """Sets the submission's state to 'withdrawn'."""
-        previous = self.state
-        self._set_state(SubmissionStates.WITHDRAWN, force, person=person)
-        self.log_action(
-            "pretalx.submission.withdraw",
-            person=person,
-            orga=orga,
-            data={"previous": previous, "from_pending": from_pending},
+    def withdraw(self, person=None, orga: bool = False):
+        from pretalx.submission.domain.submission import (  # noqa: PLC0415 -- thin method
+            set_submission_state,
         )
+
+        set_submission_state(self, SubmissionStates.WITHDRAWN, person=person, orga=orga)
 
     withdraw.alters_data = True
-
-    def remove(
-        self,
-        person=None,
-        force: bool = False,
-        orga: bool = True,
-        from_pending: bool = False,
-    ):
-        """Sets the submission's state to 'deleted'."""
-        previous = self.state
-        self._set_state(SubmissionStates.DELETED, force, person=person)
-        for answer in self.answers.all():
-            answer.remove(person=person, force=force)
-        self.log_action(
-            "pretalx.submission.deleted",
-            person=person,
-            orga=True,
-            data={"previous": previous, "from_pending": from_pending},
-        )
-
-    remove.alters_data = True
-
-    def delete(self, force: bool = False, **kwargs):
-        if self.state != SubmissionStates.DRAFT and not force:
-            raise SubmissionError(
-                "Submission is not in draft mode and cannot be deleted completely. Set the deleted flag instead."
-            )
-        self.answers.all().delete()
-        self.resources.all().delete()
-        super().delete(**kwargs)
 
     @cached_property
     def integer_uuid(self):
@@ -702,7 +489,8 @@ class Submission(GenerateCode, PretalxModel):
         # codes can contain 34 different characters (including compatibility with frab imported data) and normally have
         # 6 charactes. Since log2(34 **6) == 30.52, that just fits in to a positive 32-bit signed integer (that
         # Engelsystem expects), if we do it correctly.
-        charset = self._code_charset + [
+        charset = [
+            *self.code_charset,
             "1",
             "2",
             "4",
@@ -751,27 +539,30 @@ class Submission(GenerateCode, PretalxModel):
 
         :class:`~pretalx.schedule.models.schedule.Schedule`.
         """
-        from pretalx.agenda.permissions import is_agenda_visible
-
-        if not is_agenda_visible(None, self.event):
+        if not agenda_rules.is_agenda_visible(None, self.event):
             return []
         return self.current_slots
 
     @cached_property
+    def sorted_speakers(self):
+        if "speakers" in getattr(self, "_prefetched_objects_cache", {}):
+            return self.speakers.all()
+        return self.speakers.order_by("speaker_roles__position")
+
+    @cached_property
     def display_speaker_names(self):
         """Helper method for a consistent speaker name display."""
-        return ", ".join(speaker.get_display_name() for speaker in self.speakers.all())
+        return ", ".join(s.get_display_name() for s in self.sorted_speakers)
 
     @cached_property
     def display_title_with_speakers(self):
         title = (
             f"{phrases.base.quotation_open}{self.title}{phrases.base.quotation_close}"
         )
-        if not self.speakers.exists():
+        if not self.sorted_speakers:
             return title
         return _("{title_in_quotes} by {list_of_speakers}").format(
-            title_in_quotes=title,
-            list_of_speakers=self.display_speaker_names,
+            title_in_quotes=title, list_of_speakers=self.display_speaker_names
         )
 
     @cached_property
@@ -782,14 +573,14 @@ class Submission(GenerateCode, PretalxModel):
         return False
 
     @cached_property
-    def median_score(self):
+    def median_score(self) -> float | None:
         scores = [
             review.score for review in self.reviews.all() if review.score is not None
         ]
         return statistics.median(scores) if scores else None
 
     @cached_property
-    def mean_score(self):
+    def mean_score(self) -> float | None:
         scores = [
             review.score for review in self.reviews.all() if review.score is not None
         ]
@@ -813,36 +604,86 @@ class Submission(GenerateCode, PretalxModel):
                 & models.Q(resource__isnull=False)
                 & ~models.Q(resource="None")
             )
-            | models.Q(
+            | models.Q(  # or the link exists
                 models.Q(link__isnull=False) & ~models.Q(link="")
-            )  # or the link exists
+            )
         ).order_by("link")
 
-    @property
-    def is_deleted(self):
-        return self.state == SubmissionStates.DELETED
+    @cached_property
+    def private_resources(self):
+        return self.active_resources.filter(is_public=False)
+
+    @cached_property
+    def public_resources(self):
+        return self.active_resources.filter(is_public=True)
 
     @property
     def user_state(self):
-        if self.state == SubmissionStates.SUBMITTED and not self.cfp_open:
+        deadline = self.submission_type.deadline or self.event.cfp.deadline
+        cfp_open = (not deadline) or now() <= deadline
+        if self.state == SubmissionStates.SUBMITTED and not cfp_open:
             return "review"
         return self.state
 
     def __str__(self):
-        """Help when debugging."""
-        return f"Submission(event={self.event.slug}, code={self.code}, title={self.title}, state={self.state})"
+        if not self._state.adding:
+            return f"Submission(event={self.event.slug}, code={self.code}, title={self.title}, state={self.state})"
+        return f"Submission(code={self.code}, title={self.title}, state={self.state})"
 
     @cached_property
     def export_duration(self):
         return serialize_duration(minutes=self.get_duration())
 
     @cached_property
-    def speaker_profiles(self):
-        from pretalx.person.models.profile import SpeakerProfile
+    def requires_signup(self) -> bool:
+        annotated = getattr(self, "_annotated_requires_signup", None)
+        if annotated is not None:
+            return annotated
+        if self.attendee_signup_required is not None:
+            return self.attendee_signup_required
+        track_requires = bool(self.track_id and self.track.attendee_signup_required)
+        if not self.submission_type_id:
+            # Unsaved instance may not have a submission type yet
+            return track_requires
+        return track_requires or self.submission_type.attendee_signup_required
 
-        return SpeakerProfile.objects.filter(
-            event=self.event, user__in=self.speakers.all()
-        )
+    @cached_property
+    def confirmed_signup_count(self) -> int:
+        annotated = getattr(self, "_annotated_confirmed_signup_count", None)
+        if annotated is not None:
+            return annotated
+        return self.attendee_signups.filter(
+            state=AttendeeSignupStates.CONFIRMED
+        ).count()
+
+    @cached_property
+    def effective_signup_capacity(self) -> int | None:
+        if self.attendee_signup_capacity is not None:
+            return self.attendee_signup_capacity
+        slot = self.slot
+        if slot and slot.room:
+            return slot.room.capacity
+        return None
+
+    @cached_property
+    def signup_capacity_percent(self) -> int | None:
+        capacity = self.effective_signup_capacity
+        if not capacity:
+            return None
+        return min(100, round(self.confirmed_signup_count * 100 / capacity))
+
+    @cached_property
+    def signup_status(self) -> str | None:
+        if hasattr(self, "_annotated_signup_status"):
+            return self._annotated_signup_status
+        if not self.event.get_feature_flag("attendee_signup"):
+            return None
+        if not self.requires_signup:
+            return None
+        capacity = self.effective_signup_capacity
+        if capacity is not None and self.confirmed_signup_count >= capacity:
+            return SignupStatus.FULL
+        return SignupStatus.OPEN
 
     @property
     def availabilities(self):
@@ -851,82 +692,10 @@ class Submission(GenerateCode, PretalxModel):
         :class:`~pretalx.schedule.models.availability.Availability` objects of
         all speakers of this submission.
         """
-        from pretalx.schedule.models.availability import Availability
-
-        all_availabilities = self.event.availabilities.filter(
-            person__in=self.speaker_profiles
+        all_availabilities = self.event.valid_availabilities.filter(
+            person__in=self.speakers.all()
         )
         return Availability.intersection(all_availabilities)
-
-    def get_content_for_mail(self):
-        order = [
-            "title",
-            "abstract",
-            "description",
-            "notes",
-            "duration",
-            "content_locale",
-            "do_not_record",
-            "image",
-        ]
-        data = []
-        result = ""
-        for field in order:
-            field_content = getattr(self, field, None)
-            if field_content:
-                _field = self._meta.get_field(field)
-                field_name = _field.verbose_name or _field.name
-                data.append({"name": field_name, "value": field_content})
-        for answer in self.answers.all().order_by("question__position"):
-            if answer.question.variant == "boolean":
-                data.append(
-                    {"name": answer.question.question, "value": answer.boolean_answer}
-                )
-            elif answer.answer_file:
-                data.append(
-                    {"name": answer.question.question, "value": answer.answer_file}
-                )
-            else:
-                data.append(
-                    {"name": answer.question.question, "value": answer.answer or "-"}
-                )
-        for content in data:
-            field_name = content["name"]
-            field_content = content["value"]
-            if isinstance(field_content, bool):
-                field_content = _("Yes") if field_content else _("No")
-            elif isinstance(field_content, FieldFile):
-                field_content = (
-                    self.event.custom_domain or settings.SITE_URL
-                ) + field_content.url
-            result += f"**{field_name}**: {field_content}\n\n"
-        return result
-
-    def send_invite(self, to, _from=None, subject=None, text=None):
-        if not _from and (not subject or not text):
-            raise Exception("Please enter a sender for this invitation.")
-
-        subject = subject or phrases.cfp.invite_subject.format(
-            speaker=_from.get_display_name()
-        )
-        subject = f"[{self.event.slug}] {subject}"
-        text = text or phrases.cfp.invite_text.format(
-            event=self.event.name,
-            title=self.title,
-            url=self.urls.accept_invitation.full(),
-            speaker=_from.get_display_name(),
-        )
-        to = to.split(",") if isinstance(to, str) else to
-        for invite in to:
-            QueuedMail(
-                event=self.event,
-                to=invite,
-                subject=subject,
-                text=text,
-                locale=self.get_email_locale(),
-            ).send()
-
-    send_invite.alters_data = True
 
     def add_favourite(self, user):
         SubmissionFavourite.objects.get_or_create(user=user, submission=self)
@@ -934,19 +703,51 @@ class Submission(GenerateCode, PretalxModel):
     def remove_favourite(self, user):
         SubmissionFavourite.objects.filter(user=user, submission=self).delete()
 
+    def log_action(self, action, data=None, **kwargs):
+        if self.state != SubmissionStates.DRAFT:
+            return super().log_action(action=action, data=data, **kwargs)
+
 
 class SubmissionFavourite(PretalxModel):
     user = models.ForeignKey(
-        to="person.User",
-        on_delete=models.CASCADE,
-        related_name="submission_favourites",
+        to="person.User", on_delete=models.CASCADE, related_name="submission_favourites"
     )
     submission = models.ForeignKey(
-        to="submission.Submission",
-        on_delete=models.CASCADE,
-        related_name="favourites",
+        to="submission.Submission", on_delete=models.CASCADE, related_name="favourites"
     )
     objects = ScopedManager(event="submission__event")
 
     class Meta:
         unique_together = (("user", "submission"),)
+
+
+class SubmissionInvitation(PretalxModel):
+    """Track pending speaker invitations for submissions.
+
+    When a speaker is invited to a submission, a SubmissionInvitation is created
+    with a unique token. The invitation is deleted when the invited person accepts
+    it, or can be retracted by organisers or the submitter.
+    """
+
+    submission = models.ForeignKey(
+        to="submission.Submission", related_name="invitations", on_delete=models.CASCADE
+    )
+    email = models.EmailField(verbose_name=_("Email"))
+    token = models.CharField(default=generate_invite_code, max_length=64, unique=True)
+
+    objects = ScopedManager(event="submission__event")
+
+    class Meta:
+        unique_together = (("submission", "email"),)
+
+    class urls(EventUrls):
+        base = "{self.submission.event.urls.base}invitation/{self.submission.code}/{self.token}"
+
+    @property
+    def event(self):
+        return self.submission.event
+
+    def __str__(self):
+        return _("Invite to {submission} for {email}").format(
+            submission=self.submission.title, email=self.email
+        )

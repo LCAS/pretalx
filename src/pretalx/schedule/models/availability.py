@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: luto
+
 import datetime as dt
 
 from django.db import models
@@ -65,10 +71,12 @@ class Availability(PretalxModel):
         complete day."""
         return self.start.time() == zerotime and self.end.time() == zerotime
 
-    def serialize(self) -> dict:
-        from pretalx.api.serializers.room import AvailabilitySerializer
-
-        return AvailabilitySerializer(self).data
+    def serialize(self, full=True) -> dict:
+        result = {"start": self.start.isoformat(), "end": self.end.isoformat()}
+        if full:
+            result["id"] = self.id
+            result["allDay"] = self.all_day
+        return result
 
     def overlaps(self, other: "Availability", strict: bool) -> bool:
         """Test if two Availabilities overlap.
@@ -77,7 +85,7 @@ class Availability(PretalxModel):
         """
 
         if not isinstance(other, Availability):
-            raise Exception("Please provide an Availability object")
+            raise TypeError("Please provide an Availability object")
 
         if strict:
             return (
@@ -103,9 +111,9 @@ class Availability(PretalxModel):
         given one."""
 
         if not isinstance(other, Availability):
-            raise Exception("Please provide an Availability object.")
+            raise TypeError("Please provide an Availability object.")
         if not other.overlaps(self, strict=False):
-            raise Exception("Only overlapping Availabilities can be merged.")
+            raise ValueError("Only overlapping Availabilities can be merged.")
 
         return Availability(
             start=min(self.start, other.start),
@@ -124,9 +132,9 @@ class Availability(PretalxModel):
         one and the given one."""
 
         if not isinstance(other, Availability):
-            raise Exception("Please provide an Availability object.")
+            raise TypeError("Please provide an Availability object.")
         if not other.overlaps(self, False):
-            raise Exception("Only overlapping Availabilities can be intersected.")
+            raise ValueError("Only overlapping Availabilities can be intersected.")
 
         return Availability(
             start=max(self.start, other.start),
@@ -174,9 +182,11 @@ class Availability(PretalxModel):
         # yay for O(b*a) time! I am sure there is some fancy trick to make this faster,
         # but we're dealing with less than 100 items in total, sooo.. ¯\_(ツ)_/¯
         for avail_a in availabilities_a:
-            for avail_b in availabilities_b:
-                if avail_a.overlaps(avail_b, True):
-                    result.append(avail_a.intersect_with(avail_b))
+            result.extend(
+                avail_a.intersect_with(avail_b)
+                for avail_b in availabilities_b
+                if avail_a.overlaps(avail_b, True)
+            )
 
         return result
 

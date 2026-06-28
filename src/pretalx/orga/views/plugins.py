@@ -1,6 +1,10 @@
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.contrib import messages
 from django.db import transaction
 from django.shortcuts import redirect
+from django.urls import NoReverseMatch, reverse
 from django.utils.functional import cached_property
 from django.views.generic import TemplateView
 from django_context_decorator import context
@@ -8,20 +12,48 @@ from django_context_decorator import context
 from pretalx.common.plugins import get_all_plugins_grouped
 from pretalx.common.text.phrases import phrases
 from pretalx.common.views.mixins import EventPermissionRequired
+from pretalx.event.domain.plugins import disable_plugin, enable_plugin
 
 
 class EventPluginsView(EventPermissionRequired, TemplateView):
     template_name = "orga/plugins.html"
-    permission_required = "orga.change_plugins"
+    permission_required = "event.update_event"
+
+    def _resolve_links(self, plugin, attr):
+        links = getattr(plugin, attr, None) or []
+        result = []
+        for label, url_name, kwargs in links:
+            try:
+                url = reverse(
+                    url_name, kwargs={"event": self.request.event.slug, **kwargs}
+                )
+                result.append((url, str(label)))
+            except NoReverseMatch:
+                pass
+        return result
 
     @context
     @cached_property
     def grouped_plugins(self):
-        return get_all_plugins_grouped(self.request.event)
+        grouped = get_all_plugins_grouped(self.request.event)
+        active = self.request.event.plugin_list
+        for plugins in grouped.values():
+            for plugin in plugins:
+                if plugin.module in active:
+                    plugin.resolved_settings_links = self._resolve_links(
+                        plugin, "settings_links"
+                    )
+                    plugin.resolved_navigation_links = self._resolve_links(
+                        plugin, "navigation_links"
+                    )
+                else:
+                    plugin.resolved_settings_links = []
+                    plugin.resolved_navigation_links = []
+        return grouped
 
     @context
     def tablist(self):
-        return {key: value for key, value in self.grouped_plugins.keys()}
+        return dict(self.grouped_plugins.keys())
 
     @context
     @cached_property
@@ -37,21 +69,12 @@ class EventPluginsView(EventPermissionRequired, TemplateView):
                         value == "enable"
                         and module in self.request.event.available_plugins
                     ):
-                        self.request.event.enable_plugin(module)
-                        self.request.event.log_action(
-                            "pretalx.event.plugins.enabled",
-                            person=self.request.user,
-                            data={"plugin": module},
-                            orga=True,
+                        enable_plugin(
+                            self.request.event, module, user=self.request.user
                         )
                     else:
-                        self.request.event.disable_plugin(module)
-                        self.request.event.log_action(
-                            "pretalx.event.plugins.disabled",
-                            person=self.request.user,
-                            data={"plugin": module},
-                            orga=True,
+                        disable_plugin(
+                            self.request.event, module, user=self.request.user
                         )
-            self.request.event.save()
             messages.success(self.request, phrases.base.saved)
         return redirect(self.request.event.orga_urls.plugins)

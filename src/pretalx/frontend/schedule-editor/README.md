@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2022-present Tobias Kunze
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # pretalx-schedule-editor
 
 ## Project setup
@@ -15,19 +20,10 @@ npm start
 npm run build
 ```
 
-### Build for pretalx (web component)
-```
-npm run build:wc
-```
-
-Then copy ``dist/*js`` to ``src/pretalx/static/orga/js/`` in pretalx.
-
-### Release library to npm
-
-```sh
-npm version minor|patch
-npm publish --access=public
-```
+In a pretalx checkout this is run for you by ``python manage.py rebuild``,
+which sets ``OUT_DIR`` and ``BASE_URL`` so that the build output lands in
+Django's ``STATIC_ROOT`` and is picked up via the
+``pretalx-manifest.json`` manifest.
 
 ### Lints and fixes files
 ```

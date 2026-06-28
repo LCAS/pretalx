@@ -1,26 +1,19 @@
-import logging
-import re
-from functools import partial
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
 
-import dateutil.parser
+import logging
+
 from django import forms
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.files import File
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import UploadedFile
 from django.utils.crypto import get_random_string
 from django.utils.translation import gettext_lazy as _
 from hierarkey.forms import HierarkeyForm
-from i18nfield.forms import I18nFormField
+from i18nfield.forms import I18nFormField, I18nFormMixin, I18nModelForm, I18nTextarea
 
-from pretalx.common.forms.fields import ExtensionFileField
-from pretalx.common.forms.validators import (
-    MaxDateTimeValidator,
-    MaxDateValidator,
-    MinDateTimeValidator,
-    MinDateValidator,
-)
-from pretalx.common.text.phrases import phrases
-from pretalx.submission.models.cfp import default_fields
+from pretalx.common.forms.widgets import I18nMarkdownTextarea
 
 logger = logging.getLogger(__name__)
 
@@ -37,414 +30,6 @@ class ReadOnlyFlag:
         if self.read_only:
             raise forms.ValidationError(_("You are trying to change read-only data."))
         return super().clean()
-
-
-class PublicContent:
-    public_fields = []
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        event = getattr(self, "event", None)
-        if event and not event.feature_flags["show_schedule"]:
-            return
-        for field_name in self.Meta.public_fields:
-            field = self.fields.get(field_name)
-            if field:
-                field.original_help_text = getattr(field, "original_help_text", "")
-                field.added_help_text = getattr(field, "added_help_text", "") + str(
-                    phrases.base.public_content
-                )
-                field.help_text = field.original_help_text + " " + field.added_help_text
-
-
-class RequestRequire:
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        count_chars = self.event.cfp.settings["count_length_in"] == "chars"
-        for key in self.Meta.request_require:
-            visibility = self.event.cfp.fields.get(key, default_fields()[key])[
-                "visibility"
-            ]
-            if visibility == "do_not_ask":
-                self.fields.pop(key, None)
-            elif field := self.fields.get(key):
-                field.required = visibility == "required"
-                min_value = self.event.cfp.fields.get(key, {}).get("min_length")
-                max_value = self.event.cfp.fields.get(key, {}).get("max_length")
-                if min_value or max_value:
-                    if min_value and count_chars:
-                        field.widget.attrs["minlength"] = min_value
-                    if max_value and count_chars:
-                        field.widget.attrs["maxlength"] = max_value
-                    field.validators.append(
-                        partial(
-                            self.validate_field_length,
-                            min_length=min_value,
-                            max_length=max_value,
-                            count_in=self.event.cfp.settings["count_length_in"],
-                        )
-                    )
-                    field.original_help_text = getattr(field, "original_help_text", "")
-                    field.added_help_text = self.get_help_text(
-                        "",
-                        min_value,
-                        max_value,
-                        self.event.cfp.settings["count_length_in"],
-                    )
-                    field.help_text = (
-                        field.original_help_text + " " + field.added_help_text
-                    )
-
-    @staticmethod
-    def get_help_text(text, min_length, max_length, count_in="chars"):
-        if not min_length and not max_length:
-            return text
-        if text:
-            text = str(text) + " "
-        else:
-            text = ""
-        texts = {
-            "minmaxwords": _(
-                "Please write between {min_length} and {max_length} words."
-            ),
-            "minmaxchars": _(
-                "Please write between {min_length} and {max_length} characters."
-            ),
-            "minwords": _("Please write at least {min_length} words."),
-            "minchars": _("Please write at least {min_length} characters."),
-            "maxwords": _("Please write at most {max_length} words."),
-            "maxchars": _("Please write at most {max_length} characters."),
-        }
-        length = ("min" if min_length else "") + ("max" if max_length else "")
-        message = texts[length + count_in].format(
-            min_length=min_length, max_length=max_length
-        )
-        return (text + str(message)).strip()
-
-    @staticmethod
-    def validate_field_length(value, min_length, max_length, count_in):
-        if count_in == "chars":
-            # Line breaks should only be counted as one character
-            length = len(value.replace("\r\n", "\n"))
-        else:
-            length = len(re.findall(r"\b\w+\b", value))
-        if (min_length and min_length > length) or (max_length and max_length < length):
-            error_message = RequestRequire.get_help_text(
-                "", min_length, max_length, count_in
-            )
-            errors = {
-                "chars": _("You wrote {count} characters."),
-                "words": _("You wrote {count} words."),
-            }
-            error_message += " " + str(errors[count_in]).format(count=length)
-            raise forms.ValidationError(error_message)
-
-
-class QuestionFieldsMixin:
-    def get_field(self, *, question, initial, initial_object, readonly):
-        from pretalx.common.templatetags.rich_text import rich_text
-        from pretalx.submission.models import QuestionVariant
-
-        read_only = readonly or question.read_only
-        original_help_text = question.help_text
-        help_text = rich_text(question.help_text)[len("<p>") : -len("</p>")]
-        if question.is_public and self.event.feature_flags["show_schedule"]:
-            help_text += " " + str(phrases.base.public_content)
-        count_chars = self.event.cfp.settings["count_length_in"] == "chars"
-        if question.variant == QuestionVariant.BOOLEAN:
-            # For some reason, django-bootstrap4 does not set the required attribute
-            # itself.
-            widget = (
-                forms.CheckboxInput(attrs={"required": "required", "placeholder": ""})
-                if question.required
-                else forms.CheckboxInput()
-            )
-
-            field = forms.BooleanField(
-                disabled=read_only,
-                help_text=help_text,
-                label=question.question,
-                required=question.required,
-                widget=widget,
-                initial=(
-                    (initial == "True") if initial else bool(question.default_answer)
-                ),
-            )
-            field.original_help_text = original_help_text
-            return field
-        if question.variant == QuestionVariant.NUMBER:
-            field = forms.DecimalField(
-                disabled=read_only,
-                help_text=help_text,
-                label=question.question,
-                required=question.required,
-                min_value=question.min_number,
-                max_value=question.max_number,
-                initial=initial,
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            return field
-        if question.variant == QuestionVariant.STRING:
-            field = forms.CharField(
-                disabled=read_only,
-                help_text=RequestRequire.get_help_text(
-                    help_text,
-                    question.min_length,
-                    question.max_length,
-                    self.event.cfp.settings["count_length_in"],
-                ),
-                label=question.question,
-                required=question.required,
-                initial=initial,
-                min_length=question.min_length if count_chars else None,
-                max_length=question.max_length if count_chars else None,
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            field.validators.append(
-                partial(
-                    RequestRequire.validate_field_length,
-                    min_length=question.min_length,
-                    max_length=question.max_length,
-                    count_in=self.event.cfp.settings["count_length_in"],
-                )
-            )
-            return field
-        if question.variant == QuestionVariant.URL:
-            field = forms.URLField(
-                label=question.question,
-                required=question.required,
-                disabled=read_only,
-                help_text=question.help_text,
-                initial=initial,
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            return field
-        if question.variant == QuestionVariant.TEXT:
-            field = forms.CharField(
-                label=question.question,
-                required=question.required,
-                widget=forms.Textarea,
-                disabled=read_only,
-                help_text=RequestRequire.get_help_text(
-                    help_text,
-                    question.min_length,
-                    question.max_length,
-                    self.event.cfp.settings["count_length_in"],
-                ),
-                initial=initial,
-                min_length=question.min_length if count_chars else None,
-                max_length=question.max_length if count_chars else None,
-            )
-            field.validators.append(
-                partial(
-                    RequestRequire.validate_field_length,
-                    min_length=question.min_length,
-                    max_length=question.max_length,
-                    count_in=self.event.cfp.settings["count_length_in"],
-                )
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            return field
-        if question.variant == QuestionVariant.FILE:
-            field = ExtensionFileField(
-                label=question.question,
-                required=question.required,
-                disabled=read_only,
-                help_text=help_text,
-                initial=initial,
-                extensions=(
-                    ".png",
-                    ".jpg",
-                    ".gif",
-                    ".jpeg",
-                    ".gif",
-                    ".svg",
-                    ".bmp",
-                    ".tif",
-                    ".tiff",
-                    ".pdf",
-                    ".txt",
-                    ".docx",
-                    "doc",
-                    "rtf",
-                    ".pptx",
-                    ".ppt",
-                    ".xlsx",
-                    ".xls",
-                ),
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            return field
-        if question.variant == QuestionVariant.CHOICES:
-            choices = question.options.all()
-            field = forms.ModelChoiceField(
-                queryset=choices,
-                label=question.question,
-                required=question.required,
-                empty_label=None,
-                initial=(
-                    initial_object.options.first()
-                    if initial_object
-                    else question.default_answer
-                ),
-                disabled=read_only,
-                help_text=help_text,
-                widget=(
-                    forms.RadioSelect
-                    if len(choices) < 4
-                    else forms.Select(attrs={"class": "enhanced"})
-                ),
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            return field
-        if question.variant == QuestionVariant.MULTIPLE:
-            choices = question.options.all()
-            field = forms.ModelMultipleChoiceField(
-                queryset=choices,
-                label=question.question,
-                required=question.required,
-                widget=(
-                    forms.CheckboxSelectMultiple
-                    if len(choices) < 8
-                    else forms.SelectMultiple(attrs={"class": "enhanced"})
-                ),
-                initial=(
-                    initial_object.options.all()
-                    if initial_object
-                    else question.default_answer
-                ),
-                disabled=read_only,
-                help_text=help_text,
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            return field
-        if question.variant == QuestionVariant.DATE:
-            attrs = {"type": "date"}
-            if question.min_date:
-                attrs["data-date-start-date"] = question.min_date.isoformat()
-            if question.max_date:
-                attrs["data-date-end-date"] = question.max_date.isoformat()
-            field = forms.DateField(
-                label=question.question,
-                required=question.required,
-                disabled=read_only,
-                help_text=help_text,
-                initial=dateutil.parser.parse(initial).date() if initial else None,
-                widget=forms.DateInput(attrs=attrs),
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            if question.min_date:
-                field.validators.append(MinDateValidator(question.min_date))
-            if question.max_date:
-                field.validators.append(MaxDateValidator(question.max_date))
-            return field
-        elif question.variant == QuestionVariant.DATETIME:
-            attrs = {"type": "datetime-local"}
-            if question.min_datetime:
-                attrs["min"] = question.min_datetime.isoformat()
-            if question.max_datetime:
-                attrs["max"] = question.max_datetime.isoformat()
-            field = forms.DateTimeField(
-                label=question.question,
-                required=question.required,
-                disabled=read_only,
-                help_text=help_text,
-                initial=(
-                    dateutil.parser.parse(initial).astimezone(self.event.tz)
-                    if initial
-                    else None
-                ),
-                widget=forms.DateTimeInput(attrs=attrs),
-            )
-            field.original_help_text = original_help_text
-            field.widget.attrs["placeholder"] = ""  # XSS
-            if question.min_datetime:
-                field.validators.append(MinDateTimeValidator(question.min_datetime))
-            if question.max_datetime:
-                field.validators.append(MaxDateTimeValidator(question.max_datetime))
-            return field
-        return None
-
-    def save_questions(self, key, value):
-        """Receives a key and value from cleaned_data."""
-        from pretalx.submission.models import Answer, QuestionTarget
-
-        field = self.fields[key]
-        if field.answer:
-            # We already have a cached answer object, so we don't
-            # have to create a new one
-            if value == "" or value is None or value is False:
-                field.answer.delete()
-            else:
-                self._save_to_answer(field, field.answer, value)
-                field.answer.save()
-        elif value != "" and value is not None and value is not False:
-            answer = Answer(
-                review=(
-                    self.review
-                    if field.question.target == QuestionTarget.REVIEWER
-                    else None
-                ),
-                submission=(
-                    self.submission
-                    if field.question.target == QuestionTarget.SUBMISSION
-                    else None
-                ),
-                person=(
-                    self.speaker
-                    if field.question.target == QuestionTarget.SPEAKER
-                    else None
-                ),
-                question=field.question,
-            )
-            self._save_to_answer(field, answer, value)
-            answer.save()
-
-    def _save_to_answer(self, field, answer, value):
-        if isinstance(field, forms.ModelMultipleChoiceField):
-            answstr = ", ".join([str(option) for option in value])
-            if not answer.pk:
-                answer.save()
-            else:
-                answer.options.clear()
-            answer.answer = answstr
-            if value:
-                answer.options.add(*value)
-        elif isinstance(field, forms.ModelChoiceField):
-            if not answer.pk:
-                answer.save()
-            else:
-                answer.options.clear()
-            if value:
-                answer.options.add(value)
-                answer.answer = value.answer
-            else:
-                answer.answer = ""
-        elif isinstance(field, forms.FileField):
-            if isinstance(value, UploadedFile):
-                answer.answer_file.save(value.name, value)
-                answer.answer = "file://" + value.name
-            value = answer.answer
-        else:
-            answer.answer = value
-
-
-class I18nHelpText:
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        for field in self.fields.values():
-            if isinstance(field, I18nFormField) and not field.widget.attrs.get(
-                "placeholder"
-            ):
-                field.widget.attrs["placeholder"] = field.label
 
 
 class JsonSubfieldMixin:
@@ -464,16 +49,40 @@ class JsonSubfieldMixin:
                 defaults = self.instance._meta.get_field(path).default()
                 self.fields[field].initial = defaults.get(field)
 
+    def _apply_json_subfields(self):
+        touched_paths = set()
+        for field, path in self.Meta.json_fields.items():
+            if field not in self.cleaned_data:
+                continue
+            data_dict = getattr(self.instance, path, None) or {}
+            data_dict[field] = self.cleaned_data.get(field)
+            setattr(self.instance, path, data_dict)
+            touched_paths.add(path)
+        return touched_paths
+
+    def _post_clean(self):
+        touched_paths = self._apply_json_subfields()
+        super()._post_clean()
+        for path in touched_paths:
+            try:
+                model_field = self.instance._meta.get_field(path)
+            except FieldDoesNotExist:  # pragma: no cover -- defensive
+                continue
+            try:
+                model_field.run_validators(getattr(self.instance, path))
+            except ValidationError as exc:
+                self.add_error(None, exc)
+
     def save(self, *args, **kwargs):
         if getattr(super(), "save", None):
             instance = super().save(*args, **kwargs)
         else:
             instance = self.instance
-        for field, path in self.Meta.json_fields.items():
-            # We don't need nested data for now
-            data_dict = getattr(instance, path) or {}
-            data_dict[field] = self.cleaned_data.get(field)
-            setattr(instance, path, data_dict)
+        # ``_post_clean`` already wrote the cleaned sub-field values onto
+        # the instance, but we apply them again so callers that mutate
+        # ``cleaned_data`` between validation and save still see their
+        # changes persisted.
+        self._apply_json_subfields()
         if kwargs.get("commit", True):
             instance.save()
         return instance
@@ -481,7 +90,8 @@ class JsonSubfieldMixin:
 
 class HierarkeyMixin:
     """This basically vendors hierarkey.forms.HierarkeyForm, but with more
-    selective saving of fields."""
+    selective saving of fields.
+    """
 
     BOOL_CHOICES = HierarkeyForm.BOOL_CHOICES
 
@@ -506,12 +116,12 @@ class HierarkeyMixin:
                 if fname:
                     try:
                         default_storage.delete(fname.name)
-                    except OSError:  # pragma: no cover
-                        logger.error("Deleting file %s failed.", fname.name)
+                    except OSError:
+                        logger.exception("Deleting file %s failed.", fname.name)
 
                 # Create new file
                 newname = default_storage.save(self.get_new_filename(value.name), value)
-                value._name = newname
+                value._name = newname  # noqa: SLF001 -- Django File internal
                 self._s.set(name, value)
             elif isinstance(value, File):
                 # file is unchanged
@@ -522,8 +132,8 @@ class HierarkeyMixin:
                 if fname:
                     try:
                         default_storage.delete(fname.name)
-                    except OSError:  # pragma: no cover
-                        logger.error("Deleting file %s failed.", fname.name)
+                    except OSError:
+                        logger.exception("Deleting file %s failed.", fname.name)
                 del self._s[name]
             elif value is None:
                 del self._s[name]
@@ -532,5 +142,27 @@ class HierarkeyMixin:
 
     def get_new_filename(self, name: str) -> str:
         nonce = get_random_string(length=8)
-        suffix = name.split(".")[-1]
+        suffix = name.rsplit(".", maxsplit=1)[-1]
         return f"{self.obj._meta.model_name}-{self.attribute_name}/{self.obj.pk}/{name}.{nonce}.{suffix}"
+
+
+class PretalxI18nFormMixin(I18nFormMixin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if isinstance(field, I18nFormField):
+                if type(field.widget) is I18nTextarea:
+                    old = field.widget
+                    field.widget = I18nMarkdownTextarea(
+                        locales=old.locales, field=old.field, attrs=dict(old.attrs)
+                    )
+                    field.widget.enabled_locales = old.enabled_locales
+                if not field.widget.attrs.get("placeholder"):
+                    field.widget.attrs["placeholder"] = field.label
+
+    class Media:
+        css = {"all": ["orga/css/forms/i18n.css"]}
+
+
+class PretalxI18nModelForm(PretalxI18nFormMixin, I18nModelForm):
+    pass

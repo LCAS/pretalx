@@ -1,3 +1,10 @@
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: Lorenz Leutgeb
+
+import sys
 from argparse import RawTextHelpFormatter
 from os import environ
 from urllib.parse import urljoin
@@ -8,7 +15,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.urls import reverse
 
-from pretalx.event.utils import create_organiser_with_team
+from pretalx.event.domain.organiser import create_organiser_with_team
 from pretalx.person.models import User
 
 env_prefix = "PRETALX_INIT_ORGANISER_"
@@ -18,14 +25,14 @@ organiser_slug_env = f"{env_prefix}SLUG"
 organiser_slug_default = "conforg"
 
 
-def prompt_nonempty(prompt):  # pragma: no cover
+def prompt_nonempty(prompt):
     result = input(prompt).strip()
     while not result:
         result = input("This value is required, please enter some value to proceed: ")
     return result
 
 
-class Command(BaseCommand):  # pragma: no cover
+class Command(BaseCommand):
     help = "Initializes your pretalx instance. Only to be used once."
 
     def add_arguments(self, parser):
@@ -51,14 +58,32 @@ class Command(BaseCommand):  # pragma: no cover
                 "\nWelcome to pretalx! This is my initialization command, please use it only once."
             )
         )
-        self.stdout.write(
-            "You can abort this command at any time using C-c, and it will save no data."
-        )
+
+        if options["interactive"]:
+            self.stdout.write(
+                "You can abort this command at any time using C-c, and it will save no data."
+            )
+        else:
+            required_env_vars = (
+                "DJANGO_SUPERUSER_EMAIL",
+                "DJANGO_SUPERUSER_EMAIL",
+                organiser_name_env,
+                organiser_slug_env,
+            )
+            for env_var in required_env_vars:
+                if not environ.get(env_var):
+                    self.stdout.write(
+                        self.style.ERROR(
+                            f"You must provide the environment variable {env_var} "
+                            "if you run this command in non-interactive mode.\n"
+                            "Please refer to the documentation: https://docs.pretalx.org/administrator/commands/#init"
+                        )
+                    )
+                    sys.exit(-1)
 
         self.stdout.write(
             "\nLet's get you a user with the right to create new events and access every event on this pretalx instance."
         )
-
         call_command("createsuperuser", interactive=options["interactive"])
 
         user = User.objects.order_by("-id").filter(is_administrator=True).first()
@@ -85,7 +110,7 @@ class Command(BaseCommand):  # pragma: no cover
         team_url = urljoin(
             settings.SITE_URL,
             reverse(
-                "orga:organiser.teams.view",
+                "orga:organiser.teams.update",
                 kwargs={"organiser": organiser.slug, "pk": team.pk},
             ),
         )

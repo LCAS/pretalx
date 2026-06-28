@@ -1,133 +1,70 @@
-import json
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: AthinaDavari
 
 from django import forms
-from django.db.models import Count, Q
-from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from django.utils.translation import override
-from django_scopes.forms import SafeModelChoiceField, SafeModelMultipleChoiceField
-from i18nfield.forms import I18nFormMixin, I18nModelForm
-from i18nfield.strings import LazyI18nString
+from i18nfield.forms import I18nFormField, I18nTextarea, I18nTextInput
 
-from pretalx.common.forms.mixins import I18nHelpText, JsonSubfieldMixin, ReadOnlyFlag
-from pretalx.common.forms.widgets import EnhancedSelect, EnhancedSelectMultiple
-from pretalx.common.text.phrases import phrases
-from pretalx.submission.models import (
-    AnswerOption,
-    Question,
-    QuestionVariant,
-    SubmissionType,
-    SubmitterAccessCode,
-    Track,
+from pretalx.common.forms.mixins import (
+    JsonSubfieldMixin,
+    PretalxI18nFormMixin,
+    PretalxI18nModelForm,
+    ReadOnlyFlag,
 )
-from pretalx.submission.models.cfp import CfP, default_fields
-from pretalx.submission.models.question import QuestionRequired
+from pretalx.submission.models.cfp import CfP
 
 
 class CfPSettingsForm(
-    ReadOnlyFlag, I18nFormMixin, I18nHelpText, JsonSubfieldMixin, forms.Form
+    ReadOnlyFlag, PretalxI18nFormMixin, JsonSubfieldMixin, forms.Form
 ):
-    use_tracks = forms.BooleanField(
-        label=_("Use tracks"),
-        required=False,
-        help_text=_("Do you organise your sessions by tracks?"),
-    )
-    present_multiple_times = forms.BooleanField(
-        label=_("Slot Count"),
-        required=False,
-        help_text=_("Can sessions be held multiple times?"),
-    )
     mail_on_new_submission = forms.BooleanField(
-        label=_("Send mail on new proposal"),
+        label=_("Send email on new proposal"),
         help_text=_(
             "If this setting is checked, you will receive an email to the organiser address for every received proposal."
         ),
         required=False,
     )
+    submission_public_review = forms.BooleanField(
+        label=_("Allow submitters to share their proposal publicly"),
+        help_text=_(
+            "Allow submitters to share a secret link to their proposal with others."
+        ),
+        required=False,
+    )
+    speakers_can_edit_submissions = forms.BooleanField(
+        label=_("Allow speakers to edit their proposals and profiles"), required=False
+    )
 
     def __init__(self, *args, obj, **kwargs):
-        kwargs.pop(
-            "read_only"
-        )  # added in ActionFromUrl view mixin, but not needed here.
         self.instance = obj
         super().__init__(*args, **kwargs)
+
+        review_phase_link = f'<a href="{obj.orga_urls.review_settings}#tab-phases">{_("Review settings")}</a>'
+        self.fields["speakers_can_edit_submissions"].help_text = _(
+            "If disabled, speakers cannot edit their proposals regardless of the proposal state. "
+            "This setting overrides the {review_phase_link} for speaker editing."
+        ).format(review_phase_link=review_phase_link)
         if getattr(obj, "email", None):
             self.fields[
                 "mail_on_new_submission"
             ].help_text += f' (<a href="mailto:{obj.email}">{obj.email}</a>)'
-        self.length_fields = ["title", "abstract", "description", "biography"]
-        self.request_require_fields = [
-            "abstract",
-            "description",
-            "notes",
-            "biography",
-            "avatar",
-            "additional_speaker",
-            "availabilities",
-            "do_not_record",
-            "image",
-            "track",
-            "duration",
-            "content_locale",
-        ]
-        for attribute in self.length_fields:
-            field_name = f"cfp_{attribute}_min_length"
-            self.fields[field_name] = forms.IntegerField(
-                required=False,
-                min_value=0,
-                initial=obj.cfp.fields[attribute].get("min_length"),
-            )
-            self.fields[field_name].widget.attrs["placeholder"] = ""
-            field_name = f"cfp_{attribute}_max_length"
-            self.fields[field_name] = forms.IntegerField(
-                required=False,
-                min_value=0,
-                initial=obj.cfp.fields[attribute].get("max_length"),
-            )
-            self.fields[field_name].widget.attrs["placeholder"] = ""
-        for attribute in self.request_require_fields:
-            field_name = f"cfp_ask_{attribute}"
-            self.fields[field_name] = forms.ChoiceField(
-                required=True,
-                initial=obj.cfp.fields.get(attribute, default_fields()[attribute])[
-                    "visibility"
-                ],
-                choices=[
-                    ("do_not_ask", _("Do not ask")),
-                    ("optional", _("Ask, but do not require input")),
-                    ("required", _("Ask and require input")),
-                ],
-            )
-        if not obj.is_multilingual:
-            self.fields.pop("cfp_ask_content_locale", None)
 
-    def save(self, *args, **kwargs):
-        for key in self.request_require_fields:
-            if key not in self.instance.cfp.fields:
-                self.instance.cfp.fields[key] = default_fields()[key]
-            self.instance.cfp.fields[key]["visibility"] = self.cleaned_data.get(
-                f"cfp_ask_{key}"
-            )
-        for key in self.length_fields:
-            self.instance.cfp.fields[key]["min_length"] = self.cleaned_data.get(
-                f"cfp_{key}_min_length"
-            )
-            self.instance.cfp.fields[key]["max_length"] = self.cleaned_data.get(
-                f"cfp_{key}_max_length"
-            )
-        self.instance.cfp.save()
-        super().save(*args, **kwargs)
+    class Media:
+        js = [forms.Script("orga/js/forms/cfp.js", defer="")]
 
     class Meta:
         # These are JSON fields on event.settings
         json_fields = {
-            "use_tracks": "feature_flags",
-            "present_multiple_times": "feature_flags",
+            "submission_public_review": "feature_flags",
+            "speakers_can_edit_submissions": "feature_flags",
             "mail_on_new_submission": "mail_settings",
         }
 
 
-class CfPForm(ReadOnlyFlag, I18nHelpText, JsonSubfieldMixin, I18nModelForm):
+class CfPForm(ReadOnlyFlag, JsonSubfieldMixin, PretalxI18nModelForm):
     show_deadline = forms.BooleanField(
         label=_("Display deadline publicly"),
         required=False,
@@ -139,437 +76,119 @@ class CfPForm(ReadOnlyFlag, I18nHelpText, JsonSubfieldMixin, I18nModelForm):
         widget=forms.RadioSelect(),
     )
 
+    def __init__(self, *args, event, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.instance.event = event
+
     class Meta:
         model = CfP
-        fields = ["headline", "text", "deadline"]
-        widgets = {"deadline": forms.DateTimeInput(attrs={"type": "datetime-local"})}
+        fields = ["headline", "text", "opening", "deadline"]
         # These are JSON fields on cfp.settings
-        json_fields = {
-            "show_deadline": "settings",
-            "count_length_in": "settings",
-        }
+        json_fields = {"show_deadline": "settings", "count_length_in": "settings"}
 
 
-class QuestionForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
-    options = forms.FileField(
-        label=_("Upload options"),
-        help_text=_(
-            "You can upload question options here, one option per line. "
-            "To use multiple languages, please upload a JSON file with a list of "
-            "options:"
-        )
-        + ' <code>[{"en": "English", "de": "Deutsch"}, ...]</code>',
+class CfPFieldConfigForm(PretalxI18nFormMixin, forms.Form):
+    label = I18nFormField(
+        label=_("Custom label"),
         required=False,
+        help_text=_("Leave empty to use the default label."),
+        widget=I18nTextInput,
     )
-    options_replace = forms.BooleanField(
-        label=_("Replace existing options"),
-        help_text=_(
-            "If you upload new options, do you want to replace the existing ones? "
-            "Please note that this will DELETE all existing answers to this question! "
-            "If you do not check this, the uploaded options will be added to the "
-            "existing ones, without adding duplicates."
-        ),
+    help_text = I18nFormField(
+        label=_("Help text"),
         required=False,
+        help_text=_("Additional instructions shown below the field."),
+        widget=I18nTextarea,
+    )
+    visibility = forms.ChoiceField(
+        label=_("Visibility"),
+        choices=[("required", _("Required")), ("optional", _("Optional"))],
+        widget=forms.Select(attrs={"class": "form-control"}),
+    )
+    min_length = forms.IntegerField(
+        label=_("Minimum length"),
+        required=False,
+        min_value=0,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+    max_length = forms.IntegerField(
+        label=_("Maximum length"),
+        required=False,
+        min_value=0,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+    max = forms.IntegerField(
+        label=_("Maximum speakers"),
+        required=False,
+        min_value=1,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+        help_text=_("Maximum number of speakers per proposal (including submitter)."),
+    )
+    min_number = forms.IntegerField(
+        label=_("Minimum tags"),
+        required=False,
+        min_value=0,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+    max_number = forms.IntegerField(
+        label=_("Maximum tags"),
+        required=False,
+        min_value=1,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
     )
 
-    def __init__(self, *args, event=None, **kwargs):
+    def __init__(self, *args, field_key=None, event=None, **kwargs):
+        self.field_key = field_key
+        self.event = event
+        kwargs["locales"] = event.locales
         super().__init__(*args, **kwargs)
-        instance = kwargs.get("instance")
-        if not (
-            event.feature_flags["use_tracks"]
-            and event.tracks.all().count()
-            and event.cfp.request_track
-        ):
-            self.fields.pop("tracks")
-        else:
-            self.fields["tracks"].queryset = event.tracks.all()
-        if not event.submission_types.count():
-            self.fields.pop("submission_types")
-        else:
-            self.fields["submission_types"].queryset = event.submission_types.all()
-        if (
-            instance
-            and instance.pk
-            and instance.answers.count()
-            and not instance.is_public
-        ):
-            self.fields["is_public"].disabled = True
 
-    def clean_options(self):
-        # read uploaded file, return list of strings or list of i18n strings
-        options = self.cleaned_data.get("options")
-        if not options:
-            return
-        try:
-            content = options.read().decode("utf-8")
-        except Exception:
-            raise forms.ValidationError(_("Could not read file."))
+        self.fields["help_text"].widget.attrs["rows"] = "2"
+        self.fields["help_text"].widget.attrs["size"] = "2"
+        length_fields = ["title", "abstract", "description", "biography"]
+        if field_key not in length_fields:
+            del self.fields["min_length"]
+            del self.fields["max_length"]
 
-        try:
-            options = json.loads(content)
-            if not isinstance(options, list):
-                raise Exception(_("JSON file does not contain a list."))
-            if not all(isinstance(opt, dict) for opt in options):
-                raise Exception(_("JSON file does not contain a list of objects."))
-            return [LazyI18nString(data=opt) for opt in options]
-        except Exception:
-            options = content.split("\n")
-            return [opt.strip() for opt in options if opt.strip()]
+        if field_key != "additional_speaker":
+            del self.fields["max"]
+
+        if field_key == "tags":
+            self.fields["help_text"].help_text = _(
+                "Additional instructions shown below the field. "
+                "Note: Only public tags will be shown to submitters."
+            )
+        else:
+            del self.fields["min_number"]
+            del self.fields["max_number"]
 
     def clean(self):
-        deadline = self.cleaned_data["deadline"]
-        question_required = self.cleaned_data["question_required"]
-        if (not deadline) and (question_required == QuestionRequired.AFTER_DEADLINE):
-            self.add_error(
-                "deadline",
-                forms.ValidationError(
-                    _(
-                        "Please select a deadline after which the question should become mandatory."
-                    )
-                ),
-            )
-        if question_required in (QuestionRequired.OPTIONAL, QuestionRequired.REQUIRED):
-            self.cleaned_data["deadline"] = None
-        options = self.cleaned_data.get("options")
-        options_replace = self.cleaned_data.get("options_replace")
-        if options_replace and not options:
-            self.add_error(
-                "options_replace",
-                forms.ValidationError(
-                    _("You cannot replace answer options without uploading new ones.")
-                ),
-            )
-
-    def save(self, *args, **kwargs):
-        instance = super().save(*args, **kwargs)
-        options = self.cleaned_data.get("options")
-        options_replace = self.cleaned_data.get("options_replace")
-        if not options:
-            return instance
-        if options_replace:
-            instance.answers.all().delete()
-            instance.options.all().delete()
-            for option in options:
-                instance.options.create(answer=option)
-            return instance
-
-        # If we aren't replacing all existing options, we need to make sure
-        # we don't add duplicates.
-        existing_options = list(instance.options.all().values_list("answer", flat=True))
-        use_i18n = (
-            isinstance(options[0], LazyI18nString) and instance.event.is_multilingual
-        )
-        if not use_i18n:
-            # Monolangual i18n strings with strings aren't equal, so we're normalising.
-            with override(instance.event.locale):
-                existing_options = [str(opt) for opt in existing_options]
-                options = [str(opt) for opt in options]
-        new_options = []
-        for option in options:
-            if option not in existing_options:
-                new_options.append(AnswerOption(question=instance, answer=option))
-        AnswerOption.objects.bulk_create(new_options)
-
-    class Meta:
-        model = Question
-        fields = [
-            "target",
-            "question",
-            "help_text",
-            "question_required",
-            "deadline",
-            "freeze_after",
-            "variant",
-            "is_public",
-            "is_visible_to_reviewers",
-            "tracks",
-            "submission_types",
-            "contains_personal_data",
-            "min_length",
-            "max_length",
-            "min_number",
-            "max_number",
-            "min_date",
-            "max_date",
-            "min_datetime",
-            "max_datetime",
-        ]
-        widgets = {
-            "deadline": forms.DateTimeInput(attrs={"type": "datetime-local"}),
-            "question_required": forms.RadioSelect(),
-            "freeze_after": forms.DateTimeInput(attrs={"type": "datetime-local"}),
-            "min_datetime": forms.DateTimeInput(attrs={"type": "datetime-local"}),
-            "max_datetime": forms.DateTimeInput(attrs={"type": "datetime-local"}),
-            "min_date": forms.DateInput(attrs={"type": "date"}),
-            "max_date": forms.DateInput(attrs={"type": "date"}),
-            "tracks": EnhancedSelectMultiple,
-            "submission_types": EnhancedSelectMultiple,
-        }
-        field_classes = {
-            "variant": SafeModelChoiceField,
-            "tracks": SafeModelMultipleChoiceField,
-            "submission_types": SafeModelMultipleChoiceField,
-        }
-
-
-class AnswerOptionForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
-    class Meta:
-        model = AnswerOption
-        fields = ["answer"]
-
-
-class SubmissionTypeForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
-    def __init__(self, *args, event=None, **kwargs):
-        self.event = event
-        super().__init__(*args, **kwargs)
-
-    def clean_name(self):
-        name = self.cleaned_data["name"]
-        qs = self.event.submission_types.all()
-        if self.instance and self.instance.pk:
-            qs = qs.exclude(pk=self.instance.pk)
-        if any(str(stype.name) == str(name) for stype in qs):
+        cleaned = super().clean()
+        min_number = cleaned.get("min_number")
+        max_number = cleaned.get("max_number")
+        if min_number and max_number and min_number > max_number:
             raise forms.ValidationError(
-                _("You already have a session type by this name!")
+                _("Minimum tags cannot be greater than maximum tags.")
             )
-        return name
-
-    def save(self, *args, **kwargs):
-        instance = super().save(*args, **kwargs)
-        if instance.pk and "duration" in self.changed_data:
-            instance.update_duration()
-
-    class Meta:
-        model = SubmissionType
-        fields = ("name", "default_duration", "deadline", "requires_access_code")
-        widgets = {"deadline": forms.DateTimeInput(attrs={"type": "datetime-local"})}
+        return cleaned
 
 
-class TrackForm(ReadOnlyFlag, I18nHelpText, I18nModelForm):
+class StepHeaderForm(PretalxI18nFormMixin, forms.Form):
+    title = I18nFormField(
+        label=_("Step title"),
+        required=False,
+        help_text=_("Leave empty to use the default title."),
+        widget=I18nTextInput,
+    )
+    text = I18nFormField(
+        label=_("Step description"),
+        required=False,
+        help_text=_("Leave empty to use the default description."),
+        widget=I18nTextarea,
+    )
+
     def __init__(self, *args, event=None, **kwargs):
         self.event = event
+        kwargs["locales"] = event.locales
         super().__init__(*args, **kwargs)
-        self.fields["color"].widget.attrs["class"] = "colorpickerfield"
-        if self.instance.pk:
-            url = f"{event.cfp.urls.new_access_code}?track={self.instance.pk}"
-            self.fields["requires_access_code"].help_text += " " + _(
-                'You can create an access code <a href="{url}">here</a>.'
-            ).format(url=url)
-
-    def clean_name(self):
-        name = self.cleaned_data["name"]
-        qs = self.event.tracks.all()
-        if self.instance and self.instance.pk:
-            qs = qs.exclude(pk=self.instance.pk)
-        if any(str(track.name) == str(name) for track in qs):
-            raise forms.ValidationError(_("You already have a track by this name!"))
-        return name
-
-    class Meta:
-        model = Track
-        fields = ("name", "description", "color", "requires_access_code")
-
-
-class SubmitterAccessCodeForm(forms.ModelForm):
-    def __init__(self, *args, event, **kwargs):
-        self.event = event
-        initial = kwargs.get("initial", {})
-        if not kwargs.get("instance"):
-            initial["code"] = SubmitterAccessCode.generate_code()
-        kwargs["initial"] = initial
-        super().__init__(*args, **kwargs)
-        self.fields["submission_type"].queryset = SubmissionType.objects.filter(
-            event=self.event
-        )
-        if event.feature_flags["use_tracks"]:
-            self.fields["track"].queryset = Track.objects.filter(event=self.event)
-        else:
-            self.fields.pop("track")
-
-    class Meta:
-        model = SubmitterAccessCode
-        fields = (
-            "code",
-            "valid_until",
-            "maximum_uses",
-            "track",
-            "submission_type",
-        )
-        field_classes = {
-            "track": SafeModelChoiceField,
-            "submission_type": SafeModelChoiceField,
-        }
-        widgets = {
-            "valid_until": forms.DateTimeInput(attrs={"type": "datetime-local"}),
-            "track": EnhancedSelect,
-            "submission_type": EnhancedSelect,
-        }
-
-
-class AccessCodeSendForm(forms.Form):
-    to = forms.EmailField(label=_("To"))
-    subject = forms.CharField(label=phrases.base.email_subject)
-    text = forms.CharField(widget=forms.Textarea(), label=phrases.base.text_body)
-
-    def __init__(self, *args, instance, user, **kwargs):
-        self.access_code = instance
-        subject = _("Access code for the {event} CfP").format(event=instance.event.name)
-        text = (
-            str(
-                _(
-                    """Hi!
-
-This is an access code for the {event} CfP."""
-                ).format(event=instance.event.name)
-            )
-            + " "
-        )
-        if instance.track:
-            text += (
-                str(
-                    _(
-                        "It will allow you to submit a proposal to the “{track}” track."
-                    ).format(track=instance.track.name)
-                )
-                + " "
-            )
-        else:
-            text += str(_("It will allow you to submit a proposal to our CfP.")) + " "
-        if instance.valid_until:
-            text += (
-                str(
-                    _("This access code is valid until {date}.").format(
-                        date=instance.valid_until.strftime("%Y-%m-%d %H:%M")
-                    )
-                )
-                + " "
-            )
-        if (
-            instance.maximum_uses
-            and instance.maximum_uses != 1
-            and instance.maximum_uses - instance.redeemed > 1
-        ):
-            text += str(
-                _("The code can be redeemed multiple times ({num}).").format(
-                    num=instance.redemptions_left
-                )
-            )
-        text += _(
-            """
-Please follow this URL to use the code:
-
-  {url}
-
-I’m looking forward to your proposal!
-{name}"""
-        ).format(
-            url=instance.urls.cfp_url.full(),
-            name=user.get_display_name(),
-        )
-        initial = kwargs.get("intial", {})
-        initial["subject"] = f"[{instance.event.slug}] {subject}"
-        initial["text"] = text
-        kwargs["initial"] = initial
-        super().__init__(*args, **kwargs)
-
-    def save(self):
-        self.access_code.send_invite(
-            to=self.cleaned_data["to"].strip(),
-            subject=self.cleaned_data["subject"],
-            text=self.cleaned_data["text"],
-        )
-
-
-class QuestionFilterForm(forms.Form):
-    role = forms.ChoiceField(
-        choices=(
-            ("", phrases.base.all_choices),
-            ("accepted", _("Accepted or confirmed speakers")),
-            ("confirmed", _("Confirmed speakers")),
-        ),
-        required=False,
-        label=_("Recipients"),
-        widget=EnhancedSelect,
-    )
-    track = SafeModelChoiceField(
-        Track.objects.none(), required=False, widget=EnhancedSelect
-    )
-    submission_type = SafeModelChoiceField(
-        SubmissionType.objects.none(), required=False, widget=EnhancedSelect
-    )
-
-    def __init__(self, *args, event, **kwargs):
-        self.event = event
-        super().__init__(*args, **kwargs)
-        self.fields["submission_type"].queryset = SubmissionType.objects.filter(
-            event=event
-        )
-        if not event.feature_flags["use_tracks"]:
-            self.fields.pop("track", None)
-        elif "track" in self.fields:
-            self.fields["track"].queryset = event.tracks.all()
-
-    def get_submissions(self):
-        role = self.cleaned_data["role"]
-        track = self.cleaned_data.get("track")
-        submission_type = self.cleaned_data["submission_type"]
-        talks = self.event.submissions.all()
-        if role == "accepted":
-            talks = talks.filter(Q(state="accepted") | Q(state="confirmed"))
-        elif role == "confirmed":
-            talks = talks.filter(state="confirmed")
-        if track:
-            talks = talks.filter(track=track)
-        if submission_type:
-            talks = talks.filter(submission_type=submission_type)
-        return talks
-
-    def get_question_information(self, question):
-        result = {}
-        talks = self.get_submissions()
-        speakers = self.event.submitters.filter(submissions__in=talks)
-        answers = question.answers.filter(
-            Q(person__in=speakers) | Q(submission__in=talks)
-        )
-        result["answer_count"] = answers.count()
-        result["missing_answers"] = question.missing_answers(
-            filter_speakers=speakers, filter_talks=talks
-        )
-        if question.variant in (QuestionVariant.CHOICES, QuestionVariant.MULTIPLE):
-            grouped_answers = (
-                answers.order_by("options")
-                .values("options", "options__answer")
-                .annotate(count=Count("id"))
-                .order_by("-count")
-            )
-        elif question.variant == QuestionVariant.FILE:
-            grouped_answers = [{"answer": answer, "count": 1} for answer in answers]
-        else:
-            grouped_answers = (
-                answers.order_by("answer")
-                .values("answer")
-                .annotate(count=Count("id"))
-                .order_by("-count")
-            )
-        result["grouped_answers"] = grouped_answers
-        return result
-
-
-class ReminderFilterForm(QuestionFilterForm):
-    questions = SafeModelMultipleChoiceField(
-        Question.objects.none(),
-        required=False,
-        help_text=_("If you select no question, all questions will be used."),
-        label=phrases.cfp.questions,
-    )
-
-    def get_question_queryset(self):
-        # We want to exclude questions with "freeze after", the deadlines of which have passed
-        return Question.objects.filter(
-            event=self.event,
-            target__in=["speaker", "submission"],
-        ).exclude(freeze_after__lt=timezone.now())
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["questions"].queryset = self.get_question_queryset()
+        self.fields["text"].widget.attrs["rows"] = "3"

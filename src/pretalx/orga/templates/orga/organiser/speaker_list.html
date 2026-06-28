@@ -1,8 +1,16 @@
 {% extends "orga/base.html" %}
-{% load bootstrap4 %}
-{% load i18n %}
+{% comment %}
+SPDX-FileCopyrightText: 2024-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% block extra_title %}{{ page_obj.paginator.count }} {% blocktranslate trimmed count count=page_obj.paginator.count %}speaker{% plural %}speakers{% endblocktranslate %} :: {% endblock extra_title %}
+{% load i18n %}
+{% load render_table from django_tables2 %}
+
+{% block extra_title %}{{ page_obj.paginator.count }}
+    {% blocktranslate trimmed count count=page_obj.paginator.count %}speaker{% plural %}speakers{% endblocktranslate %}
+    ::
+{% endblock extra_title %}
 
 {% block content %}
     <h2>
@@ -14,53 +22,7 @@
         {% endblocktranslate %}
     </h2>
 
-    <div class="submit-group search-submit-group">
-        <form class="search-form">
-            {% bootstrap_form search_form %}
-            {% bootstrap_form filter_form %}
-            <button class="btn btn-info btn-search" type="submit">{% translate "Search" %}</button>
-        </form>
-    </div>
+    {% include "common/includes/search_form.html" %}
 
-    <div class="table-responsive-md">
-        <table class="table table-sm table-hover table-flip table-sticky">
-            <thead>
-                <tr>
-                    <th>
-                        {% translate "Name" %}
-                        <a href="{% querystring sort="name" %}"><i class="fa fa-caret-down" title="{% translate "Sort (a-z)" %}"></i></a>
-                        <a href="{% querystring sort="-name" %}"><i class="fa fa-caret-up" title="{% translate "Sort (z-a)" %}"></i></a>
-                    </th>
-                    <th>
-                        {% translate "Email" %}
-                        <a href="{% querystring sort="email" %}"><i class="fa fa-caret-down" title="{% translate "Sort (a-z)" %}"></i></a>
-                        <a href="{% querystring sort="-email" %}"><i class="fa fa-caret-up" title="{% translate "Sort (z-a)" %}"></i></a>
-                    </th>
-                    <th class="numeric">
-                        {% translate "Accepted Proposals" %}
-                        <a href="{% querystring sort="-accepted_submission_count" %}"><i class="fa fa-caret-down" title="{% translate "Sort (high-low)" %}"></i></a>
-                        <a href="{% querystring sort="accepted_submission_count" %}"><i class="fa fa-caret-up" title="{% translate "Sort (low-high)" %}"></i></a>
-                    </th>
-                    <th class="numeric">
-                        {% translate "Proposals" %}
-                        <a href="{% querystring sort="-submission_count" %}"><i class="fa fa-caret-down" title="{% translate "Sort (high-low)" %}"></i></a>
-                        <a href="{% querystring sort="submission_count" %}"><i class="fa fa-caret-up" title="{% translate "Sort (low-high)" %}"></i></a>
-                    </th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for speaker in speakers %}
-                    <tr>
-                        <td>{{ speaker.get_display_name }}</td>
-                        <td><a href="mailto:{{ speaker.email }}">{{ speaker.email }}</a></td>
-                        <td class="numeric">{{ speaker.accepted_submission_count }}</td>
-                        <td class="numeric">{{ speaker.submission_count }}</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-
-    {% include "orga/includes/pagination.html" %}
-
+    {% render_table table %}
 {% endblock content %}

@@ -1,3 +1,6 @@
+.. SPDX-FileCopyrightText: 2018-present Tobias Kunze
+.. SPDX-License-Identifier: CC-BY-SA-4.0
+
 .. highlight:: python
    :linenothreshold: 5
 
@@ -38,9 +41,17 @@ The exporter class
 
    .. py:attribute:: BaseExporter.event
 
-   .. autoattribute:: identifier
+   .. autoattribute:: filename_identifier
 
-      This is an abstract attribute, you **must** override this!
+      This is an abstract attribute, you **must** override either this attribute or the ``identifier`` attribute!
+
+   .. autoattribute:: extension
+
+      This is an abstract attribute, you **must** override either this attribute or implement the ``identifier`` attribute!
+
+   .. autoattribute:: content_type
+
+      This is an abstract attribute, you **must** override either this attribute or implement the ``render`` method!
 
    .. autoattribute:: verbose_name
 
@@ -50,11 +61,7 @@ The exporter class
 
       This is an abstract attribute, you **must** override this!
 
-   .. automethod:: show_qrcode
-
    .. automethod:: get_qrcode
-
-   .. automethod:: urls
 
    .. autoattribute:: icon
 
@@ -62,9 +69,9 @@ The exporter class
 
    .. autoattribute:: group
 
-   .. automethod:: render
+   .. automethod:: get_data
 
-      This is an abstract method, you **must** override this!
+      This is an abstract method, you **must** override this or implement the ``render`` method!
 
 
 If you are planning to write an exporter that exports to CSV, have a look at

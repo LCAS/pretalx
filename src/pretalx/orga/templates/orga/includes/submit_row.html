@@ -1,19 +1,20 @@
-{% load i18n %}
+{% comment %}
+SPDX-FileCopyrightText: 2018-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-<div class="submit-group panel">
-    <span></span>
+<div class="submit-group flex-row-reverse">
     <span>
-        <button
-            type="submit" class="btn btn-success btn-lg"
-            {% if submit_value %}value="{{ submit_value }}"{% endif %}
-            {% if submit_name %}name="{{ submit_name }}"{% endif %}
-        >
-            <i class="fa fa-check"></i>
-            {% if submit_label %}
-                {{ submit_label }}
-            {% else %}
-                {{ phrases.base.save }}
-            {% endif %}
-        </button>
+        {{ extra_content_right }}
+        {% for button in submit_buttons %}
+            {{ button }}
+        {% empty %}
+            {% include "common/ui/button.html" with type="submit" size="lg" color="success" icon="check" label=phrases.base.save %}
+        {% endfor %}
+    </span>
+    <span>
+        {% for button in submit_buttons_extra %}
+            {{ button }}
+        {% endfor %}
     </span>
 </div>

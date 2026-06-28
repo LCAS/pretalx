@@ -1,26 +1,37 @@
 {% extends "cfp/event/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
 
-{% load bootstrap4 %}
+This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+SPDX-FileContributor: Raphael Michel
+{% endcomment %}
+
+{% load form_media %}
 {% load i18n %}
 
-{% block title %}{% translate "Login" %} :: {% endblock title %}
+{% block scripts %}{% form_media %}{% endblock scripts %}
+
+{% block title %}{% translate "Login" %} ::
+{% endblock title %}
 
 {% block content %}
     <h2>{% translate "Welcome back!" %}</h2>
     <p>
         {% blocktranslate trimmed %}
-            You do not need an account to view the event, or submit feedback, or receive
-            schedule updates. You’ll only need an account if you participate in the
-            event as speaker or as an organiser.
+            You do not need an account to view the event, or submit feedback, or receive schedule updates. You’ll only
+            need an account if you participate in the event as speaker or as an organiser.
         {% endblocktranslate %}
     </p>
     <p>
         {% blocktranslate trimmed %}
-            If you already created a proposal for a different event on this server, you can re-use your account
-            to log in for this event.
+            If you already created a proposal for a different event on this server, you can re-use your account to log
+            in for this event.
         {% endblocktranslate %}
     </p>
 
-    {% include "common/auth.html" %}
-
+    <form method="post">
+        {% csrf_token %}
+        {{ form }}
+    </form>
 {% endblock content %}

@@ -1,3 +1,8 @@
+{% comment %}
+SPDX-FileCopyrightText: 2024-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
+
 {% load i18n %}
 <div class="dashboard-block-wrapper">
     <a class="dashboard-block dashboard-block-extended" href="{{ event.orga_urls.base }}">
@@ -7,7 +12,10 @@
         </div>
     </a>
     <div class="dashboard-block-extension">
-        <a href="{{ event.orga_urls.submissions }}" class="dashboard-block-addon dashboard-block-addon-{% if event.submission_count %}info{% else %}secondary{% endif %}">
+        <a
+            href="{{ event.orga_urls.submissions }}"
+            class="dashboard-block-addon dashboard-block-addon-{% if event.submission_count %}info{% else %}secondary{% endif %}"
+        >
             {% if event.submission_count %}
                 {{ event.submission_count }}
                 {% blocktranslate trimmed count count=event.submission_count %}
@@ -19,9 +27,12 @@
                 {% translate "No proposals yet" %}
             {% endif %}
         </a>
-        <a href="{{ event.orga_urls.base }}" class="dashboard-block-addon dashboard-block-addon-{% if event.is_public %}success{% else %}secondary{% endif %}">
+        <a
+            href="{{ event.orga_urls.base }}"
+            class="dashboard-block-addon dashboard-block-addon-{% if event.is_public %}success{% else %}secondary{% endif %}"
+        >
             {% if event.is_public %}
-                <div class="state active">{% translate "live" %}</div>
+                <div class="state active">{% translate "live" context "event visibility: publicly accessible" %}</div>
             {% else %}
                 <div class="state inactive">{% translate "Not public" %}</div>
             {% endif %}

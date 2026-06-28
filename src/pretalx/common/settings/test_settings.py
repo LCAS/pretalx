@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
+# ruff: noqa: F405
+
 import atexit
 import os
 import tempfile
@@ -11,7 +16,7 @@ config_path = Path("test/sqlite.cfg")
 if config_path.exists():
     os.environ.setdefault("PRETALX_CONFIG_FILE", str(config_path))
 
-from pretalx.settings import *  # NOQA
+from pretalx.settings import *  # noqa: F403, E402 -- wildcard import intentional; import after settings setup
 
 BASE_DIR = Path(tmpdir.name)
 DATA_DIR = BASE_DIR
@@ -20,27 +25,34 @@ MEDIA_ROOT = DATA_DIR / "media"
 STATIC_ROOT = DATA_DIR / "static"
 HTMLEXPORT_ROOT = DATA_DIR / "htmlexport"
 SITE_URL = "http://testserver"
-SITE_NETLOC = urlparse(SITE_URL).netloc
+_site_url = urlparse(SITE_URL)
+SITE_NETLOC = _site_url.netloc
+SITE_HOST = (_site_url.hostname or "").lower()
 
 for directory in (BASE_DIR, DATA_DIR, LOG_DIR, MEDIA_ROOT, HTMLEXPORT_ROOT):
     directory.mkdir(parents=True, exist_ok=True)
 
-INSTALLED_APPS.append("tests.dummy_app.PluginApp")  # noqa
+with suppress(ImportError):
+    import tests.dummy_app  # noqa: F401, E402 -- check if available; import after settings setup
+
+    INSTALLED_APPS.append("tests.dummy_app.PluginApp")
+
+with suppress(ImportError):
+    import tests.dummy_app_no_hooks  # noqa: F401, E402 -- check if available; import after settings setup
+
+    INSTALLED_APPS.append("tests.dummy_app_no_hooks.PluginApp")
 
 atexit.register(tmpdir.cleanup)
 
 EMAIL_BACKEND = "django.core.mail.outbox"
 MAIL_FROM = "orga@orga.org"
 
-COMPRESS_ENABLED = COMPRESS_OFFLINE = False
-STORAGES["staticfiles"][
-    "BACKEND"
-] = "django.contrib.staticfiles.storage.StaticFilesStorage"
+STORAGES["staticfiles"]["BACKEND"] = (
+    "django.contrib.staticfiles.storage.StaticFilesStorage"
+)
 
-COMPRESS_PRECOMPILERS_ORIGINAL = COMPRESS_PRECOMPILERS  # NOQA
-COMPRESS_PRECOMPILERS = ()  # NOQA
-TEMPLATES[0]["OPTIONS"]["loaders"] = (  # NOQA
-    ("django.template.loaders.cached.Loader", template_loaders),  # NOQA
+TEMPLATES[0]["OPTIONS"]["loaders"] = (
+    ("django.template.loaders.cached.Loader", template_loaders),
 )
 
 DEBUG = False
@@ -51,21 +63,18 @@ DEBUG_PROPAGATE_EXCEPTIONS = True
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
 # Disable celery
-CELERY_ALWAYS_EAGER = True
-HAS_CELERY = False
+CELERY_TASK_ALWAYS_EAGER = True
 
 # Don't use redis
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
-HAS_REDIS = False
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.dummy.DummyCache",
-    }
-}
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.dummy.DummyCache"}}
 
 with suppress(ValueError):
-    INSTALLED_APPS.remove("debug_toolbar.apps.DebugToolbarConfig")  # noqa
-    MIDDLEWARE.remove("debug_toolbar.middleware.DebugToolbarMiddleware")  # noqa
+    INSTALLED_APPS.remove("debug_toolbar.apps.DebugToolbarConfig")
+    MIDDLEWARE.remove("debug_toolbar.middleware.DebugToolbarMiddleware")
+
+# HTML minification is unnecessary overhead in tests
+MIDDLEWARE.remove("django_minify_html.middleware.MinifyHtmlMiddleware")
 
 
 # Don't run migrations
@@ -77,7 +86,7 @@ class DisableMigrations:
         return None
 
 
-if not os.environ.get("TRAVIS", ""):
+if not os.environ.get("GITHUB_WORKFLOW", ""):
     MIGRATION_MODULES = DisableMigrations()
 
 
@@ -88,3 +97,8 @@ LANGUAGES_INFORMATION["en-mozilla"] = {
     "natural_name": "Testlocale",
     "percentage": 94,
 }
+
+WHITENOISE_AUTOREFRESH = True
+LOAD_SPECTACULAR = True
+INSTALLED_APPS.append("drf_spectacular")
+REST_FRAMEWORK["DEFAULT_SCHEMA_CLASS"] = "drf_spectacular.openapi.AutoSchema"

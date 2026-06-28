@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2022-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import json
 import logging
 from urllib.parse import urljoin
@@ -15,10 +18,10 @@ MANIFEST_PATH = settings.STATIC_ROOT / "pretalx-manifest.json"
 # not currently running `rebuild` (which creates the manifest in the first place).
 if not settings.VITE_DEV_MODE and not settings.VITE_IGNORE:
     try:
-        with open(MANIFEST_PATH) as fp:
+        with MANIFEST_PATH.open() as fp:
             _MANIFEST = json.load(fp)
-    except Exception as e:
-        LOGGER.warning(f"Error reading vite manifest at {MANIFEST_PATH}: {str(e)}")
+    except (OSError, json.JSONDecodeError) as e:
+        LOGGER.warning("Error reading vite manifest at %s: %s", MANIFEST_PATH, e)
 
 
 def generate_script_tag(path, attrs):
@@ -56,7 +59,7 @@ def generate_css_tags(asset, already_processed=None):
 
 
 @register.simple_tag
-@mark_safe
+@mark_safe  # noqa: S308  -- generates static script/link tags
 def vite_asset(path):
     """
     Generates one <script> tag and <link> tags for each of the CSS dependencies.
@@ -82,7 +85,7 @@ def vite_asset(path):
 
 
 @register.simple_tag
-@mark_safe
+@mark_safe  # noqa: S308  -- generates static script tag
 def vite_hmr():
     if not settings.VITE_DEV_MODE:
         return ""

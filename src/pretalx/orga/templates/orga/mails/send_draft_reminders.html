@@ -1,24 +1,27 @@
 {% extends "orga/mails/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2022-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load bootstrap4 %}
 {% load i18n %}
 
 {% block mail_content %}
+    <h2>{% translate "Send reminder to unsubmitted proposal drafts" %}</h2>
+    <div class="alert alert-warning">
+        {% blocktranslate trimmed %}
+            These emails will be sent out immediately! They will not be saved to the outbox or logged first, to protect
+            the privacy of the draft authors.
+        {% endblocktranslate %}
+    </div>
+    <p>
+        <a href="{{ draft_reminder_template.urls.base }}">
+            {% translate "Email template" %}:
+            {% translate "Draft proposal reminder" %}
+        </a>
+    </p>
     <form method="post">
         {% csrf_token %}
-        <h2>{% translate "Send reminder to unsubmitted proposal drafts" %}</h2>
-        <div class="alert alert-warning">
-            {% blocktranslate trimmed %}
-                These emails will be sent out immediately! They will not be
-                saved to the outbox or logged first, to protect the privacy of
-                the draft authors.
-            {% endblocktranslate %}
-        </div>
-        {% bootstrap_form_errors form %}
-        {% bootstrap_field form.subject layout="event" %}
-        {% bootstrap_field form.text layout="event" %}
-
-        {% include "orga/includes/submit_row.html" with submit_label=phrases.base.send %}
-
+        {% include "orga/includes/submit_row.html" %}
     </form>
 {% endblock mail_content %}

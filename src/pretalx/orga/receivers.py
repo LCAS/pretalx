@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2022-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.dispatch import receiver
 
 from pretalx.agenda.signals import html_above_session_pages, html_below_session_pages
@@ -5,7 +8,9 @@ from pretalx.agenda.signals import html_above_session_pages, html_below_session_
 
 @receiver(html_above_session_pages, dispatch_uid="html_above_sessions_settings")
 def add_html_above_session_pages(sender, request, submission, **kwargs):
-    from pretalx.common.templatetags.rich_text import rich_text
+    from pretalx.common.templatetags.rich_text import (  # noqa: PLC0415 -- receiver
+        rich_text,
+    )
 
     text = request.event.display_settings.get("texts", {}).get(
         "agenda_session_above", ""
@@ -17,7 +22,9 @@ def add_html_above_session_pages(sender, request, submission, **kwargs):
 
 @receiver(html_below_session_pages, dispatch_uid="html_above_sessions_settings")
 def add_html_below_session_pages(sender, request, submission, **kwargs):
-    from pretalx.common.templatetags.rich_text import rich_text
+    from pretalx.common.templatetags.rich_text import (  # noqa: PLC0415 -- receiver
+        rich_text,
+    )
 
     text = request.event.display_settings.get("texts", {}).get(
         "agenda_session_below", ""

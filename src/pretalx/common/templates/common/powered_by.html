@@ -1,11 +1,17 @@
+{% comment %}
+SPDX-FileCopyrightText: 2020-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
+
 {% load i18n %}
+{% load safelink %}
 
 {% comment %}
 
     Hi, there!
 
     You have found the place that will allow you to remove or change the link to pretalx from all
-    event websites. Consider, though: please don’t?
+    event websites. However, doing so will most likely violate the pretalx license:
 
     Building pretalx has taken a ton of time and work and dedication – all of it right in the open
     for people to see and to use. I’m busy adding new features all the time, and on the side I
@@ -19,19 +25,21 @@
     contributors or customers – won’t find us. Without contributors and users and, yes, customers,
     pretalx will be less maintained and ultimately less useful to you.
 
-    So, if you’re set on editing this file: Please leave our link in. Re-style it, re-word it, put
-    your own link next to it – but please do me, and pretalx, and ultimately yourself, the favour of
-    not hiding us.
+    So this is why I changed the license and made specific provisions for the removal of the pretalx
+    attribution in the website footer. Please make sure you read the license, particularly the intro
+    containing the specific extra condition.
 
-    Thank you ❤,
+    Thank you,
     Tobias
 
     P.S.: If you find yourself interested in a support contract or paid feature development after all,
     you can reach me at sales@pretalx.com.
 
 {% endcomment %}
-{% with 'href="https://pretalx.com" target="_blank" rel="noopener"' as a_attr %}
-    {% blocktranslate trimmed %}
-        powered by <a {{ a_attr }}>pretalx</a>
-    {% endblocktranslate %}
+{% if not secure_link %}
+    {% safelink "https://pretalx.com" as secure_link %}
+{% endif %}
+{% with 'href="'|add:secure_link|add:'" target="_blank" rel="noopener"'|safe as a_attr %}
+    {% blocktranslate trimmed %}powered by <a {{ a_attr }}>pretalx</a>{% endblocktranslate %}
+    {# removing or hiding this might be in violation of the pretalx license #}
 {% endwith %}

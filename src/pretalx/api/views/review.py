@@ -1,42 +1,130 @@
-from django.db import models
-from rest_framework import viewsets
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
 
-from pretalx.api.serializers.review import AnonymousReviewSerializer, ReviewSerializer
-from pretalx.submission.models import Review
-from pretalx.submission.models.submission import SubmissionStates
+from django.utils.functional import cached_property
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import filters, viewsets
+from rest_framework.permissions import SAFE_METHODS
+
+from pretalx.api.documentation import (
+    build_expand_docs,
+    build_search_docs,
+    extend_schema,
+    extend_schema_view,
+)
+from pretalx.api.filters.review import ReviewFilter
+from pretalx.api.serializers.review import ReviewSerializer, ReviewWriteSerializer
+from pretalx.api.views.mixins import ActivityLogMixin, PretalxViewSetMixin
+from pretalx.submission.domain.queries.submission import submissions_for_user
+from pretalx.submission.models import Review, Submission
 
 
-class ReviewViewSet(viewsets.ReadOnlyModelViewSet):
+class ReviewSearchFilter(filters.SearchFilter):
+    def get_search_fields(self, view, request):
+        if view.can_see_reviewer_names:
+            return ("submission__title", "user__name")
+        return ("submission__title",)
+
+
+@extend_schema_view(
+    list=extend_schema(
+        summary="List Reviews",
+        parameters=[
+            build_search_docs("submission.title", "user.name"),
+            build_expand_docs(
+                "user",
+                "scores.category",
+                "submission",
+                "submission.speakers",
+                "submission.track",
+                "submission.submission_type",
+                "submission.tags",
+            ),
+        ],
+    ),
+    retrieve=extend_schema(
+        summary="Show Review",
+        parameters=[build_expand_docs("user", "submission", "scores.category")],
+    ),
+    create=extend_schema(
+        summary="Create Review",
+        request=ReviewWriteSerializer,
+        responses={201: ReviewSerializer},
+    ),
+    update=extend_schema(
+        summary="Update Reviews",
+        request=ReviewWriteSerializer,
+        responses={200: ReviewSerializer},
+    ),
+    partial_update=extend_schema(
+        summary="Update Reviews (Partial Update)",
+        request=ReviewWriteSerializer,
+        responses={200: ReviewSerializer},
+    ),
+    destroy=extend_schema(summary="Delete Reviews"),
+)
+class ReviewViewSet(ActivityLogMixin, PretalxViewSetMixin, viewsets.ModelViewSet):
     serializer_class = ReviewSerializer
     queryset = Review.objects.none()
-    filterset_fields = ("submission__code",)
+    filter_backends = (ReviewSearchFilter, filters.OrderingFilter, DjangoFilterBackend)
+    filterset_class = ReviewFilter
+    ordering_fields = ("id", "created")
+    ordering = ("id",)
+    endpoint = "reviews"
+    # We only permit access to this endpoint if the user can see all reviews,
+    # as otherwise we would potentially have to filter for reviews to submissions
+    # that the user has reviewed already.
+    permission_map = {"list": "submission.list_all_review"}
 
-    def get_serializer_class(self):
-        if not self.request.user.has_perm(
-            "orga.view_reviewer_names", self.request.event
-        ):
-            return AnonymousReviewSerializer
-        return self.serializer_class
+    @cached_property
+    def can_see_reviewer_names(self):
+        return bool(
+            self.event
+            and self.request.user.has_perm(
+                "submission.list_reviewers_review", self.event
+            )
+        )
+
+    def get_unversioned_serializer_class(self):
+        if self.request.method not in SAFE_METHODS:
+            return ReviewWriteSerializer
+        return ReviewSerializer
+
+    @cached_property
+    def visible_submissions(self):
+        if not self.event:
+            return Submission.objects.none()
+        return submissions_for_user(self.event, self.request.user, review_context=True)
 
     def get_queryset(self):
-        if not self.request.user.has_perm("orga.view_reviews", self.request.event):
+        if not self.event or self.request.user.is_anonymous:
+            # This happens only during API doc generation
             return Review.objects.none()
+
         queryset = (
-            Review.objects.filter(submission__event=self.request.event)
-            .exclude(submission__speakers__in=[self.request.user])
-            .exclude(submission__state=SubmissionStates.DELETED)
+            Review.objects.filter(
+                submission__event=self.request.event,
+                submission__in=self.visible_submissions,
+            )
+            .select_related("submission", "user")
+            .prefetch_related("scores", "scores__category", "answers")
+            .order_by("pk")
         )
-        limit_tracks = self.request.user.teams.filter(
-            models.Q(all_events=True)
-            | models.Q(
-                models.Q(all_events=False)
-                & models.Q(limit_events__in=[self.request.event])
-            ),
-            limit_tracks__isnull=False,
-        )
-        if limit_tracks.exists():
-            tracks = set()
-            for team in limit_tracks:
-                tracks.update(team.limit_tracks.filter(event=self.request.event))
-            queryset = queryset.filter(submission__track__in=tracks)
-        return queryset.order_by("created")
+        if fields := self.check_expanded_fields(
+            "submission.track", "submission.submission_type", "user"
+        ):
+            queryset = queryset.select_related(
+                *[field.replace(".", "__") for field in fields]
+            )
+        if fields := self.check_expanded_fields(
+            "submission.tags", "submission.assigned_reviewers", "submission.speakers"
+        ):
+            queryset = queryset.prefetch_related(
+                *[field.replace(".", "__") for field in fields]
+            )
+        return queryset
+
+    def get_serializer_context(self):
+        result = super().get_serializer_context()
+        result["submissions"] = self.visible_submissions
+        return result

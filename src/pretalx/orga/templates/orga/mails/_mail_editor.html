@@ -1,10 +1,14 @@
 {% extends "orga/mails/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load bootstrap4 %}
 {% load i18n %}
 {% load static %}
 
-{% block extra_title %}{% translate "Email editor" %} :: {% endblock extra_title %}
+{% block extra_title %}{% translate "Email editor" %} ::
+{% endblock extra_title %}
 
 {% block mail_content %}
     <form method="post" class="form-with-placeholder">
@@ -20,44 +24,74 @@
                     {% block email_editor_title_detail %}{% endblock email_editor_title_detail %}
                 </small>
             </h3>
+            {% include "common/forms/errors.html" %}
         </div>
         <div id="placeholder-neighbour">
-            {% bootstrap_form_errors form %}
-            <fieldset>
-                <legend>{% translate "Recipients" %}</legend>
-                {% block recipient_form %}{% endblock recipient_form %}
-                <details class="card">
-                    <summary class="card-header">{% translate "Advanced settings" %}</summary>
-                    <div class="card-body">
-                        {% block advanced_recipient_form %}
-                            {% bootstrap_field form.reply_to layout="event" %}
-                            {% bootstrap_field form.bcc layout="event" %}
-                        {% endblock advanced_recipient_form %}
-                    </div>
-                </details>
-            </fieldset>
-            <fieldset>
-                <legend>{% translate "Content" %}</legend>
-                {% bootstrap_field form.subject layout="event" %}
-                {% bootstrap_field form.text layout="event" %}
-            </fieldset>
-        </div>
+            <div role="tablist">
+                <input
+                    role="tab"
+                    type="radio"
+                    id="tab-recipients"
+                    name="tablist"
+                    aria-controls="tabpanel-recipients"
+                    aria-selected="true"
+                    checked
+                >
+                <label for="tab-recipients">{% translate "Recipients" %}</label>
 
-        <div class="col col-md-2" id="placeholder-column">
-            <legend>{% translate "Placeholders" %}</legend>
+                <input
+                    role="tab"
+                    type="radio"
+                    id="tab-content"
+                    name="tablist"
+                    aria-controls="tabpanel-content"
+                    aria-selected="false"
+                >
+                <label for="tab-content">{% translate "Content" %}</label>
+            </div>
 
-            {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.submission tag="submission" %}
-            {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.slot tag="slot" %}
-            {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.user tag="user" %}
-            {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.event tag="event" %}
-            {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.other tag="other" %}
+            <section
+                id="tabpanel-recipients"
+                role="tabpanel"
+                aria-labelledby="tab-recipients"
+                tabindex="0"
+                aria-hidden="false"
+            >
+                <fieldset>
+                    {% block recipient_form %}{% endblock recipient_form %}
+                    <details class="card">
+                        <summary class="card-header">{% translate "Advanced settings" %}</summary>
+                        <div class="card-body">
+                            {% block advanced_recipient_form %}
+                                {{ form.reply_to.as_field_group }}
+                                {{ form.bcc.as_field_group }}
+                            {% endblock advanced_recipient_form %}
+                        </div>
+                    </details>
+                </fieldset>
+            </section>
 
+            <section id="tabpanel-content" role="tabpanel" aria-labelledby="tab-content" aria-hidden="true">
+                <fieldset>
+                    {{ form.subject.as_field_group }}
+                    {{ form.text.as_field_group }}
+                </fieldset>
+            </section>
+            <div class="col col-md-2" id="placeholder-column">
+                <legend>{% translate "Placeholders" %}</legend>
+
+                {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.submission tag="submission" %}
+                {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.slot tag="slot" %}
+                {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.user tag="user" %}
+                {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.event tag="event" %}
+                {% include "orga/mails/_placeholder_group.html" with placeholders=form.grouped_placeholders.other tag="other" %}
+            </div>
         </div>
 
         {% block email_editor_preview %}
-            {% if request.method == "POST" %}
+            {% if output %}
                 <fieldset class="mt-4">
-                    <legend>{% translate "E-mail preview" %}</legend>
+                    <legend id="preview">{% translate "Email preview" %}</legend>
                     <div class="alert alert-info">
                         {% blocktranslate trimmed with count=mail_count %}
                             Roughly {{ count }} emails will be generated.
@@ -67,22 +101,24 @@
                         <div class="alert alert-warning">
                             <span>
                                 {% blocktranslate trimmed %}
-                                    You have placeholders in your email that are either not valid or not valid for every email!
+                                    You have placeholders in your email that are either not valid or not valid for every
+                                    email!
                                 {% endblocktranslate %}
                                 <ul>
                                     {# &#123; is the HTML entity for {, which would break django template syntax #}
                                     {% for w in form.warnings %}<li>&#123;{{ w }}}</li>{% endfor %}
                                 </ul>
                                 {% blocktranslate trimmed %}
-                                    Emails where placeholders are invalid will <b>not</b> be created!
-                                    For example, if you are using {session_room}, but some proposals don’t have a room yet, only emails for proposals with a scheduled room will be created.
+                                    Emails where placeholders are invalid will <strong>not</strong> be created! For
+                                    example, if you are using {session_room}, but some proposals don’t have a room yet,
+                                    only emails for proposals with a scheduled room will be created.
                                 {% endblocktranslate %}
                             </span>
                         </div>
                     {% endif %}
-                    <div class="tab-pane mail-preview-group">
+                    <div class="tab-pane mail-preview-group i18n-form-group">
                         {% for locale, out in output.items %}
-                            <div lang="{{ locale }}" class="mail-preview">
+                            <div {% if output|length > 1 %}lang="{{ locale }}"{% endif %} class="mail-preview">
                                 <strong>{{ out.subject|safe }}</strong>
                                 <br>
                                 <br>
@@ -96,29 +132,30 @@
 
         {% block skip_queue %}
             {% if form.skip_queue and request.method == "POST" %}
-                <hr />
-                {% bootstrap_field form.skip_queue layout="event" %}
+                <hr>
+                {{ form.skip_queue.as_field_group }}
             {% endif %}
         {% endblock skip_queue %}
 
-        {% block email_editor_actions %}
-            <div class="submit-group mt-3">
-                <span></span>
+        {% if confirm_skip_queue %}
+            <div class="alert alert-danger">
                 <span>
-                    <button type="submit" class="btn btn-lg btn-outline-info btn-save mr-2" name="action" value="preview">
-                        {% translate "Preview email" %}
-                    </button>
-                    {% if request.method == "POST" %}
-                        <button type="submit" class="btn btn-lg btn-success">
-                            {% block send_button_label %}
-                                {% translate "Send to outbox" %}
-                            {% endblock send_button_label %}
-                        </button>
-                    {% endif %}
+                    <strong>
+                        {% blocktranslate trimmed count count=mail_count %}
+                            You are about to immediately send {{ count }} email.
+                        {% plural %}
+                            You are about to immediately send {{ count }} emails.
+                        {% endblocktranslate %}
+                    </strong>
+                    <br>
+                    {% blocktranslate trimmed %}
+                        These emails will be sent right now instead of being placed in the outbox. You will not be able
+                        to review or recall them. Please confirm that you want to send them.
+                    {% endblocktranslate %}
                 </span>
             </div>
-        {% endblock email_editor_actions %}
-    </form>
+        {% endif %}
 
-    <script src="{% static "orga/js/placeholder.js" %}" defer></script>
+        {% include "orga/includes/submit_row.html" %}
+    </form>
 {% endblock mail_content %}

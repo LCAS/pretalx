@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.urls import include, path
 from django.views.generic.base import RedirectView
 
@@ -28,24 +31,16 @@ urlpatterns = [
     path("", RedirectView.as_view(url="event", permanent=False)),
     path("admin/", admin.AdminDashboard.as_view(), name="admin.dashboard"),
     path("admin/update/", admin.UpdateCheckView.as_view(), name="admin.update"),
-    path(
-        "admin/users/<slug:code>/",
-        admin.AdminUserDetail.as_view(),
-        name="admin.user.view",
+    path("admin/test-mail/", admin.TestMailView.as_view(), name="admin.test_mail"),
+    *admin.AdminUserView.get_urls(
+        url_base="admin/users",
+        url_name="admin.user",
+        namespace="orga",
+        actions=("list", "detail", "delete"),
     ),
-    path(
-        "admin/users/<slug:code>/delete/",
-        admin.AdminUserDelete.as_view(),
-        name="admin.user.delete",
-    ),
-    path("admin/users/", admin.AdminUserList.as_view(), name="admin.user.list"),
-    path("me", event.UserSettings.as_view(), name="user.view"),
+    path("me", person.UserSettings.as_view(), name="user.view"),
     path("me/subuser", person.SubuserView.as_view(), name="user.subuser"),
-    path(
-        "invitation/<code>",
-        event.InvitationView.as_view(),
-        name="invitation.view",
-    ),
+    path("invitation/<code>", event.InvitationView.as_view(), name="invitation.view"),
     path("start/redirect", dashboard.start_redirect_view, name="start.redirect"),
     path(
         "organiser/",
@@ -68,53 +63,35 @@ urlpatterns = [
                     name="organiser.settings",
                 ),
                 path(
-                    "settings/delete",
+                    "settings/delete/",
                     organiser.OrganiserDelete.as_view(),
                     name="organiser.delete",
                 ),
-                path("api/users", organiser.speaker_search, name="organiser.user_list"),
-                path("teams/", organiser.TeamList.as_view(), name="organiser.teams"),
                 path(
-                    "teams/new",
-                    organiser.TeamDetail.as_view(),
-                    name="organiser.teams.create",
+                    "api/users/", organiser.speaker_search, name="organiser.user_list"
+                ),
+                *organiser.TeamView.get_urls(
+                    url_base="teams", url_name="organiser.teams", namespace="orga"
                 ),
                 path(
-                    "teams/<int:pk>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                organiser.TeamDetail.as_view(),
-                                name="organiser.teams.view",
-                            ),
-                            path(
-                                "delete",
-                                organiser.TeamDelete.as_view(),
-                                name="organiser.teams.delete",
-                            ),
-                            path(
-                                "delete/<int:user_pk>",
-                                organiser.TeamDelete.as_view(),
-                                name="organiser.teams.delete_member",
-                            ),
-                            path(
-                                "reset/<int:user_pk>",
-                                organiser.TeamResetPassword.as_view(),
-                                name="organiser.team.password_reset",
-                            ),
-                            path(
-                                "uninvite",
-                                organiser.TeamUninvite.as_view(),
-                                name="organiser.teams.uninvite",
-                            ),
-                            path(
-                                "resend",
-                                organiser.TeamResend.as_view(),
-                                name="organiser.teams.resend",
-                            ),
-                        ]
-                    ),
+                    "teams/<int:team_pk>/members/<int:user_pk>/delete/",
+                    organiser.TeamMemberDelete.as_view(),
+                    name="organiser.teams.members.delete",
+                ),
+                path(
+                    "teams/<int:team_pk>/members/<int:user_pk>/reset/",
+                    organiser.TeamResetPassword.as_view(),
+                    name="organiser.teams.members.reset",
+                ),
+                path(
+                    "teams/<int:pk>/invites/<int:invite_pk>/uninvite/",
+                    organiser.TeamUninvite.as_view(),
+                    name="organiser.teams.invites.uninvite",
+                ),
+                path(
+                    "teams/<int:pk>/invites/<int:invite_pk>/resend/",
+                    organiser.TeamResend.as_view(),
+                    name="organiser.teams.invites.resend",
                 ),
                 path(
                     "speakers/",
@@ -145,142 +122,100 @@ urlpatterns = [
                 path("live", event.EventLive.as_view(), name="event.live"),
                 path("history/", event.EventHistory.as_view(), name="event.history"),
                 path(
+                    "history/<int:pk>/",
+                    event.EventHistoryDetail.as_view(),
+                    name="event.history.detail",
+                ),
+                path(
+                    "preferences/", person.PreferencesView.as_view(), name="preferences"
+                ),
+                path(
                     "cfp/",
-                    RedirectView.as_view(pattern_name="orga:cfp.text.view"),
+                    RedirectView.as_view(pattern_name="orga:cfp.editor"),
                     name="cfp",
                 ),
-                path("cfp/flow/", cfp.CfPFlowEditor.as_view(), name="cfp.flow"),
                 path(
-                    "cfp/questions/",
-                    cfp.CfPQuestionList.as_view(),
-                    name="cfp.questions.view",
+                    "cfp/editor/",
+                    include(
+                        [
+                            path("", cfp.CfPFlowEditor.as_view(), name="cfp.editor"),
+                            path(
+                                "step/<str:step>/",
+                                cfp.CfPEditorStep.as_view(),
+                                name="cfp.editor.step",
+                            ),
+                            path(
+                                "step/<str:step>/reorder/",
+                                cfp.CfPEditorReorder.as_view(),
+                                name="cfp.editor.reorder",
+                            ),
+                            path(
+                                "step/<str:step>/<str:action>/",
+                                cfp.CfPEditorFieldToggle.as_view(),
+                                name="cfp.editor.field_toggle",
+                            ),
+                            path(
+                                "step/<str:step>/field/<str:field_key>/",
+                                cfp.CfPEditorField.as_view(),
+                                name="cfp.editor.field",
+                            ),
+                            path(
+                                "question/<int:question_id>/",
+                                cfp.CfPEditorQuestion.as_view(),
+                                name="cfp.editor.question",
+                            ),
+                            path(
+                                "reset/",
+                                cfp.CfPEditorReset.as_view(),
+                                name="cfp.editor.reset",
+                            ),
+                        ]
+                    ),
+                ),
+                *cfp.QuestionView.get_urls(
+                    url_base="cfp/questions", url_name="cfp.questions", namespace="orga"
                 ),
                 path(
-                    "cfp/questions/new",
-                    cfp.CfPQuestionDetail.as_view(),
-                    name="cfp.questions.create",
-                ),
-                path(
-                    "cfp/questions/remind",
+                    "cfp/questions/remind/",
                     cfp.CfPQuestionRemind.as_view(),
                     name="cfp.questions.remind",
                 ),
                 path(
-                    "cfp/questions/<int:pk>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                cfp.CfPQuestionDetail.as_view(),
-                                name="cfp.question.view",
-                            ),
-                            *cfp.QuestionOrderView.get_urls(),
-                            path(
-                                "delete",
-                                cfp.CfPQuestionDelete.as_view(),
-                                name="cfp.question.delete",
-                            ),
-                            path(
-                                "edit",
-                                cfp.CfPQuestionDetail.as_view(),
-                                name="cfp.question.edit",
-                            ),
-                            path(
-                                "toggle",
-                                cfp.CfPQuestionToggle.as_view(),
-                                name="cfp.question.toggle",
-                            ),
-                        ]
-                    ),
+                    "cfp/questions/<int:pk>/toggle/",
+                    cfp.CfPQuestionToggle.as_view(),
+                    name="cfp.question.toggle",
+                ),
+                path(
+                    "cfp/questions/<int:pk>/download/",
+                    cfp.QuestionFileDownloadView.as_view(),
+                    name="cfp.question.download",
                 ),
                 path("cfp/text", cfp.CfPTextDetail.as_view(), name="cfp.text.view"),
-                path(
-                    "cfp/types/",
-                    cfp.SubmissionTypeList.as_view(),
-                    name="cfp.types.view",
+                *cfp.SubmissionTypeView.get_urls(
+                    url_base="cfp/types", url_name="cfp.types", namespace="orga"
                 ),
                 path(
-                    "cfp/types/new",
-                    cfp.SubmissionTypeDetail.as_view(),
-                    name="cfp.types.create",
+                    "cfp/types/<int:pk>/default/",
+                    cfp.SubmissionTypeDefault.as_view(),
+                    name="cfp.type.default",
+                ),
+                *cfp.TrackView.get_urls(
+                    url_base="cfp/tracks", url_name="cfp.tracks", namespace="orga"
+                ),
+                *cfp.AccessCodeView.get_urls(
+                    url_base="cfp/access-codes",
+                    url_name="cfp.access_code",
+                    namespace="orga",
                 ),
                 path(
-                    "cfp/types/<int:pk>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                cfp.SubmissionTypeDetail.as_view(),
-                                name="cfp.type.view",
-                            ),
-                            path(
-                                "delete",
-                                cfp.SubmissionTypeDelete.as_view(),
-                                name="cfp.type.delete",
-                            ),
-                            path(
-                                "default",
-                                cfp.SubmissionTypeDefault.as_view(),
-                                name="cfp.type.default",
-                            ),
-                        ]
-                    ),
-                ),
-                path("cfp/tracks/", cfp.TrackList.as_view(), name="cfp.tracks.view"),
-                path(
-                    "cfp/tracks/new",
-                    cfp.TrackDetail.as_view(),
-                    name="cfp.track.create",
+                    "cfp/access-codes/<slug:code>/send",
+                    cfp.AccessCodeSend.as_view(),
+                    name="cfp.access_code.send",
                 ),
                 path(
-                    "cfp/tracks/<int:pk>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                cfp.TrackDetail.as_view(),
-                                name="cfp.track.view",
-                            ),
-                            path(
-                                "delete",
-                                cfp.TrackDelete.as_view(),
-                                name="cfp.track.delete",
-                            ),
-                            *cfp.TrackOrderView.get_urls(),
-                        ]
-                    ),
-                ),
-                path(
-                    "cfp/access-codes/",
-                    cfp.AccessCodeList.as_view(),
-                    name="cfp.access_code.view",
-                ),
-                path(
-                    "cfp/access-codes/new",
-                    cfp.AccessCodeDetail.as_view(),
-                    name="cfp.access_code.create",
-                ),
-                path(
-                    "cfp/access-codes/<slug:code>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                cfp.AccessCodeDetail.as_view(),
-                                name="cfp.access_code.view",
-                            ),
-                            path(
-                                "send",
-                                cfp.AccessCodeSend.as_view(),
-                                name="cfp.access_code.send",
-                            ),
-                            path(
-                                "delete",
-                                cfp.AccessCodeDelete.as_view(),
-                                name="cfp.access_code.delete",
-                            ),
-                        ]
-                    ),
+                    "mails/sending-status",
+                    mails.MailSendingStatus.as_view(),
+                    name="mails.sending_status",
                 ),
                 path(
                     "mails/<int:pk>/",
@@ -314,32 +249,10 @@ urlpatterns = [
                         ]
                     ),
                 ),
-                path(
-                    "mails/templates/",
-                    mails.TemplateList.as_view(),
-                    name="mails.templates.list",
-                ),
-                path(
-                    "mails/templates/new",
-                    mails.TemplateDetail.as_view(),
-                    name="mails.templates.create",
-                ),
-                path(
-                    "mails/templates/<int:pk>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                mails.TemplateDetail.as_view(),
-                                name="mails.templates.view",
-                            ),
-                            path(
-                                "delete",
-                                mails.TemplateDelete.as_view(),
-                                name="mails.templates.delete",
-                            ),
-                        ]
-                    ),
+                *mails.MailTemplateView.get_urls(
+                    url_base="mails/templates",
+                    url_name="mails.templates",
+                    namespace="orga",
                 ),
                 path(
                     "mails/compose/reminders",
@@ -362,6 +275,11 @@ urlpatterns = [
                     name="mails.compose.sessions",
                 ),
                 path("mails/sent", mails.SentMail.as_view(), name="mails.sent"),
+                path(
+                    "mails/sidebar-count",
+                    mails.MailSidebarCount.as_view(),
+                    name="mails.sidebar_count",
+                ),
                 path(
                     "mails/outbox/",
                     mails.OutboxList.as_view(),
@@ -393,14 +311,9 @@ urlpatterns = [
                     name="submissions.cards",
                 ),
                 path(
-                    "submissions/feed/",
-                    submission.SubmissionFeed(),
-                    name="submissions.feed",
-                ),
-                path(
                     "submissions/apply-pending/",
-                    submission.ApplyPending.as_view(),
-                    name="submissions.apply_pending",
+                    submission.ApplyPendingBulk.as_view(),
+                    name="submissions.apply_pending.bulk",
                 ),
                 path(
                     "submissions/statistics/",
@@ -412,32 +325,10 @@ urlpatterns = [
                     submission.AllFeedbacksList.as_view(),
                     name="submissions.feedback",
                 ),
-                path(
-                    "submissions/tags/",
-                    submission.TagList.as_view(),
-                    name="submissions.tags.view",
-                ),
-                path(
-                    "submissions/tags/new",
-                    submission.TagDetail.as_view(),
-                    name="submissions.tag.create",
-                ),
-                path(
-                    "submissions/tags/<int:pk>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                submission.TagDetail.as_view(),
-                                name="submissions.tag.view",
-                            ),
-                            path(
-                                "delete",
-                                submission.TagDelete.as_view(),
-                                name="submissions.tag.delete",
-                            ),
-                        ]
-                    ),
+                *submission.TagView.get_urls(
+                    url_base="submissions/tags",
+                    url_name="submissions.tags",
+                    namespace="orga",
                 ),
                 path(
                     "submissions/<code>/",
@@ -475,7 +366,7 @@ urlpatterns = [
                             ),
                             path(
                                 "delete",
-                                submission.SubmissionStateChange.as_view(),
+                                submission.SubmissionDelete.as_view(),
                                 name="submissions.delete",
                             ),
                             path(
@@ -494,12 +385,22 @@ urlpatterns = [
                                 name="submissions.speakers.delete",
                             ),
                             path(
+                                "speakers/reorder",
+                                submission.SubmissionSpeakersReorder.as_view(),
+                                name="submissions.speakers.reorder",
+                            ),
+                            path(
+                                "speakers/invitation/retract",
+                                submission.SubmissionInvitationRetract.as_view(),
+                                name="submissions.speakers.invitation.retract",
+                            ),
+                            path(
                                 "reviews/",
                                 review.ReviewSubmission.as_view(),
                                 name="submissions.reviews",
                             ),
                             path(
-                                "reviews/delete",
+                                "reviews/<int:pk>/delete",
                                 review.ReviewSubmissionDelete.as_view(),
                                 name="submissions.reviews.submission.delete",
                             ),
@@ -514,9 +415,34 @@ urlpatterns = [
                                 name="submissions.toggle_featured",
                             ),
                             path(
+                                "apply_pending",
+                                submission.ApplyPending.as_view(),
+                                name="submissions.apply_pending",
+                            ),
+                            path(
                                 "anonymise/",
                                 submission.Anonymise.as_view(),
                                 name="submissions.anonymise",
+                            ),
+                            path(
+                                "comments/",
+                                submission.CommentList.as_view(),
+                                name="submissions.comments.list",
+                            ),
+                            path(
+                                "comments/<int:pk>/delete",
+                                submission.CommentDelete.as_view(),
+                                name="submissions.comments.delete",
+                            ),
+                            path(
+                                "history/",
+                                submission.SubmissionHistory.as_view(),
+                                name="submissions.history",
+                            ),
+                            path(
+                                "signup/",
+                                submission.SubmissionSignup.as_view(),
+                                name="submissions.signup",
                             ),
                         ]
                     ),
@@ -549,42 +475,19 @@ urlpatterns = [
                         ]
                     ),
                 ),
-                path(
-                    "info/",
-                    speaker.InformationList.as_view(),
-                    name="speakers.information.list",
-                ),
-                path(
-                    "info/new",
-                    speaker.InformationDetail.as_view(),
-                    name="speakers.information.create",
-                ),
-                path(
-                    "info/<int:pk>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                speaker.InformationDetail.as_view(),
-                                name="speakers.information.view",
-                            ),
-                            path(
-                                "delete",
-                                speaker.InformationDelete.as_view(),
-                                name="speakers.information.delete",
-                            ),
-                        ]
-                    ),
+                *speaker.SpeakerInformationView.get_urls(
+                    url_base="info", url_name="speakers.information", namespace="orga"
                 ),
                 path(
                     "reviews/",
                     review.ReviewDashboard.as_view(),
                     name="reviews.dashboard",
                 ),
+                path("reviews/bulk/", review.BulkReview.as_view(), name="reviews.bulk"),
                 path(
-                    "reviews/bulk/",
-                    review.BulkReview.as_view(),
-                    name="reviews.bulk",
+                    "reviews/bulk-tag/",
+                    review.BulkTagging.as_view(),
+                    name="reviews.bulk_tag",
                 ),
                 path(
                     "reviews/regenerate/",
@@ -607,9 +510,12 @@ urlpatterns = [
                     name="reviews.export",
                 ),
                 path(
-                    "settings/",
-                    event.EventDetail.as_view(),
-                    name="settings.event.view",
+                    "settings/", event.EventDetail.as_view(), name="settings.event.view"
+                ),
+                path(
+                    "settings/font-preview.css",
+                    event.FontPreviewCSS.as_view(),
+                    name="settings.font-preview.css",
                 ),
                 path(
                     "settings/mail",
@@ -635,12 +541,11 @@ urlpatterns = [
                     "settings/review/phase/<int:pk>/",
                     include(
                         [
-                            *event.ReviewPhaseOrderView.get_urls(),
                             path(
                                 "activate",
                                 event.PhaseActivate.as_view(),
                                 name="settings.review.phase.activate",
-                            ),
+                            )
                         ]
                     ),
                 ),
@@ -673,11 +578,6 @@ urlpatterns = [
                     name="schedule.quick",
                 ),
                 path(
-                    "schedule/reset",
-                    schedule.ScheduleResetView.as_view(),
-                    name="schedule.reset",
-                ),
-                path(
                     "schedule/toggle",
                     schedule.ScheduleToggleView.as_view(),
                     name="schedule.toggle",
@@ -687,33 +587,10 @@ urlpatterns = [
                     schedule.ScheduleResendMailsView.as_view(),
                     name="schedule.resend_mails",
                 ),
-                path(
-                    "schedule/rooms/",
-                    schedule.RoomList.as_view(),
-                    name="schedule.rooms.list",
-                ),
-                path(
-                    "schedule/rooms/new",
-                    schedule.RoomDetail.as_view(),
-                    name="schedule.rooms.create",
-                ),
-                path(
-                    "schedule/rooms/<int:pk>/",
-                    include(
-                        [
-                            path(
-                                "",
-                                schedule.RoomDetail.as_view(),
-                                name="schedule.rooms.view",
-                            ),
-                            path(
-                                "delete",
-                                schedule.RoomDelete.as_view(),
-                                name="schedule.rooms.delete",
-                            ),
-                            *schedule.RoomOrderView.get_urls(),
-                        ]
-                    ),
+                *schedule.RoomView.get_urls(
+                    url_base="schedule/rooms",
+                    url_name="schedule.rooms",
+                    namespace="orga",
                 ),
                 path(
                     "schedule/api/talks/<int:pk>/",

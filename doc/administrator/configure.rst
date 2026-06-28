@@ -1,3 +1,6 @@
+.. SPDX-FileCopyrightText: 2017-present Tobias Kunze
+.. SPDX-License-Identifier: CC-BY-SA-4.0
+
 .. _configure:
 
 Configuration
@@ -64,9 +67,12 @@ The filesystem section
 ``static``
 ~~~~~~~~~~
 
-- The ``statics`` option sets the directory that contains static files. It needs to
-  be writable by the pretalx process. pretalx will put files there during the ``rebuild`` and
-  ``collectstatic`` commands.
+- The ``static`` option sets the directory that contains the collected static
+  files, which your web server serves under the ``/static/`` URL. pretalx puts
+  files there during the ``rebuild`` and ``collectstatic`` commands, so the
+  directory needs to be writable by the user running those commands. Run
+  ``python -m pretalx rebuild`` after every install and upgrade (right after
+  ``migrate``) to (re)populate it.
 - **Environment variable:** ``PRETALX_FILESYSTEM_STATIC``
 - **Default:** A directory called ``static.dist`` next to pretalx’s ``manage.py``.
 
@@ -77,7 +83,8 @@ The site section
 ~~~~~~~~~
 
 - Decides if pretalx runs in debug mode. Please use this mode for development and debugging, not
-  for live usage.
+  for live usage. pretalx behaves differently when ``debug`` is on, so you should run **all**
+  your production commands, like e.g. ``rebuild`` with ``debug`` turned off.
 - **Environment variable:** ``PRETALX_DEBUG``
 - **Default:** ``True`` if you’re executing ``runserver``, ``False`` otherwise. **Never run a
   production server in debug mode.**
@@ -126,6 +133,25 @@ The site section
 - **Environment variables:** ``PRETALX_SITE_CSP``, ``PRETALX_SITE_CSP_SCRIPT`` etc.
 - **Default**: ``''``
 
+``max_pagination_limit``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- The maximum number of items that can be requested per page. Users can request
+  smaller page sizes, but cannot exceed this limit. Set to ``-1`` to remove the
+  limit entirely. This setting applies to both API pages and UI pages.
+- **Environment variable:** ``PRETALX_MAX_PAGINATION_LIMIT``
+- **Default:** ``250``
+
+``highlighted_plugins``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+- A comma-separated list of plugin module names that should be highlighted as
+  recommended plugins. Highlighted plugins appear first in plugin lists and
+  display a "Recommended" badge in both the plugin settings page and the event
+  creation wizard. The order of the list does not matter, as the group of
+  highlighted plugins will be sorted alphabetically.
+- **Environment variable:** ``PRETALX_HIGHLIGHTED_PLUGINS``
+- **Default:** ``''``
 
 The database section
 --------------------
@@ -242,15 +268,16 @@ triggered from an event context) and team invitations.
 The celery section
 ------------------
 
-Celery is not a requirement for pretalx. Celery runs as a separate process, and
-allows you to execute long-running tasks away from the usual request-response
+Celery runs as a separate process and handles long-running tasks like sending
+emails, processing images, and cleaning up files outside of the request/response
 cycle.
 
-.. warning:: If this config section is present, pretalx will assume that Celery
-             workers exist and collect talks. If you include this section without
-             providing Celery workers, no asynchronous tasks (like email sending)
-             will be processed. If you do not use Celery, omit this section in
-             your configuration.
+.. warning:: Do not include this section in development mode unless you are really
+             running Celery workers: If this config section is present, pretalx
+             will assume that Celery workers exist and collect tasks. Omitting
+             this section will make pretalx fall back to synchronous in-request
+             task execution, which is enough for most development tasks, but is
+             NOT supported in production.
 
 ``backend``
 ~~~~~~~~~~~
@@ -271,24 +298,25 @@ cycle.
 The redis section
 -----------------
 
-If you configure a redis server, pretalx can use it for locking, caching and
-session storage to speed up operations. You will need to install ``django_redis``.
+pretalx uses redis for locking, caching, rate limiting and (by default) session
+storage. A redis server is required to run pretalx.
 
 ``location``
 ~~~~~~~~~~~~
 
-- The location of redis, if you want to use it as a cache.
-  ``redis://[:password]@127.0.0.1:6379/1`` would be a sensible value, or
-  ``unix://[:password]@/path/to/socket.sock?db=0`` if you prefer to use sockets.
+- The location of redis. The default points at a local redis on the standard
+  port, which is enough for most single-host setups. For a custom host or
+  authentication, use a URL like ``redis://[:password]@127.0.0.1:6379/1``, or
+  ``unix://[:password]@/path/to/socket.sock?db=0`` if you prefer sockets.
 - **Environment variable:** ``PRETALX_REDIS``
-- **Default:** ``''``
+- **Default:** ``redis://127.0.0.1:6379/1``
 
 ``session``
 ~~~~~~~~~~~
 
 - If you want to use redis as your session storage, set this to ``True``.
 - **Environment variable:** ``PRETALX_REDIS_SESSIONS``
-- **Default:** ``False``
+- **Default:** ``True``
 
 The logging section
 -------------------
@@ -323,6 +351,16 @@ The locale section
 - The system’s default time zone as a ``pytz`` name.
 - **Environment variable:** ``PRETALX_TIME_ZONE``
 - **Default:** ``UTC``
+
+The files section
+-----------------
+
+``upload_limit``
+~~~~~~~~~~~~~~~~
+
+- The maximum file size for uploads in MB.
+- **Environment variable:** ``PRETALX_FILE_UPLOAD_LIMIT``
+- **Default:** ``10``
 
 
 .. _Python: https://docs.python.org/3/library/configparser.html

@@ -1,32 +1,25 @@
 {% extends "orga/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2022-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load bootstrap4 %}
-{% load compress %}
 {% load i18n %}
-{% load formset_tags %}
-{% load static %}
 
-{% block extra_title %}{% translate "Assign reviewers" %} :: {% endblock extra_title %}
+{% block extra_title %}{% translate "Assign reviewers" %} ::
+{% endblock extra_title %}
 
 {% block content %}
     <h2>{% translate "Assign reviewers" %}</h2>
     <p>
         {% blocktranslate trimmed with href="https://github.com/pretalx/pretalx/blob/main/doc/user/review-assignments.json" %}
-            You can upload your reviewer assignments from a JSON file here. You can either have the proposal codes (e.g. “UX3N1”) as keys, and user identification as values, or the other way around. User identification can be either the reviewer’s email address or their user code (e.g. “34KJN”). You can find an example file <a href="{{ href }}">here</a>.
+            You can upload your reviewer assignments from a JSON file here. You can either have the proposal codes (e.g.
+            “UX3N1”) as keys, and user identification as values, or the other way around. User identification can be
+            either the reviewer’s email address or their user code (e.g. “34KJN”). You can find an example file <a
+                href="{{ href }}"
+            >here</a>.
         {% endblocktranslate %}
     </p>
-    <form method="post" class="d-flex flex-column" enctype="multipart/form-data">
-        {% csrf_token %}
-        {% bootstrap_form_errors form %}
-        {% bootstrap_form form layout="event" %}
-        <div class="submit-group panel">
-            <span></span>
-            <span>
-                <button type="submit" class="btn btn-success btn-lg">
-                    <i class="fa fa-check"></i>
-                    {% translate "Import" %}
-                </button>
-            </span>
-        </div>
-    </form>
+
+    {% include "orga/includes/base_form.html" %}
 {% endblock content %}

@@ -1,12 +1,15 @@
-import json
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import logging
-from contextlib import suppress
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.utils.functional import cached_property
 from django_scopes import ScopedManager
+
+from pretalx.common.signals import activitylog_display, activitylog_object_link
 
 
 class ActivityLog(models.Model):
@@ -37,7 +40,7 @@ class ActivityLog(models.Model):
     content_object = GenericForeignKey("content_type", "object_id")
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
     action_type = models.CharField(max_length=200)
-    data = models.TextField(null=True, blank=True)
+    data = models.JSONField(null=True, blank=True, default=dict)
     is_orga_action = models.BooleanField(default=False)
 
     objects = ScopedManager(event="event")
@@ -53,15 +56,11 @@ class ActivityLog(models.Model):
 
     @cached_property
     def json_data(self):
-        if self.data:
-            with suppress(json.JSONDecodeError):
-                return json.loads(self.data)
-        return {}
+        # Kept for backwards compatibility, as well as to avoid None-checks
+        return self.data or {}
 
     @cached_property
-    def display(self):
-        from pretalx.common.signals import activitylog_display
-
+    def display(self) -> str:
         for _receiver, response in activitylog_display.send(
             self.event, activitylog=self
         ):
@@ -69,20 +68,31 @@ class ActivityLog(models.Model):
                 return response
 
         logger = logging.getLogger(__name__)
-        logger.warning(f'Unknown log action "{self.action_type}".')
+        logger.warning('Unknown log action "%s".', self.action_type)
         return self.action_type
 
     @cached_property
     def display_object(self) -> str:
         """Returns a link (formatted HTML) to the object in question."""
-        from pretalx.common.signals import activitylog_object_link
-
-        if not self.content_object:
+        try:
+            if not self.content_object:
+                return ""
+        except (
+            AttributeError
+        ):  # pragma: no cover — stale ContentType whose model class was removed
             return ""
 
-        responses = activitylog_object_link.send(sender=self.event, activitylog=self)
-        if responses:
-            for _receiver, response in responses:
-                if response:
-                    return response
+        for _receiver, response in activitylog_object_link.send(
+            sender=self.event, activitylog=self
+        ):
+            if response:
+                return response
         return ""
+
+    @cached_property
+    def changes(self):
+        from pretalx.common.log import (  # noqa: PLC0415 -- thin method
+            resolve_log_changes,
+        )
+
+        return resolve_log_changes(self)

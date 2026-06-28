@@ -1,32 +1,31 @@
 {% extends "orga/base.html" %}
-{% load bootstrap4 %}
-{% load i18n %}
-{% load static %}
+{% comment %}
+SPDX-FileCopyrightText: 2021-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% block extra_title %}{% translate "Export review data" %} :: {% endblock extra_title %}
+{% load i18n %}
+
+{% block extra_title %}{% translate "Export reviews" %} ::
+{% endblock extra_title %}
 
 {% block content %}
-    <h2>{% translate "Export review data" %}</h2>
+    <h2>{% translate "Export reviews" %}</h2>
 
     {% include "orga/includes/tablist.html" %}
 
-    <div role="tabpanel" id="tabpanel-custom" aria-labelledby="tab-custom" tabindex="0" aria-hidden="false">
+    <section role="tabpanel" id="tabpanel-custom" aria-labelledby="tab-custom" tabindex="0" aria-hidden="false">
         <p>
-            {% blocktranslate trimmed %}
-                Build your own custom export here, by selecting all the data you need,
-                and the export format. CSV exports can be opened with Excel and similar
-                applications, while JSON exports are often used for integration with
-                other tools.
-            {% endblocktranslate %}
+            {{ phrases.orga.export_custom_hint }}
         </p>
         <form method="post">
             {% csrf_token %}
             <fieldset>
-                <legend>{% translate "Dataset" %}</legend>
-                {% bootstrap_field form.target layout="event" %}
+                <legend id="dataset">{% translate "Dataset" %}</legend>
+                {{ form.target.as_field_group }}
             </fieldset>
             <fieldset>
-                <legend>{% translate "Data fields" %}</legend>
+                <legend id="fields">{% translate "Data fields" %}</legend>
                 <div class="d-flex">
                     <div class="ml-auto form-check">
                         <input type="checkbox" id="select-all" name="select-all">
@@ -34,45 +33,33 @@
                     </div>
                 </div>
                 {% for field in form.export_fields %}
-                    {% bootstrap_field field layout="event" %}
+                    {{ field.as_field_group }}
                 {% endfor %}
             </fieldset>
             <fieldset>
-                <legend>{% translate "Export settings" %}</legend>
-                {% bootstrap_field form.export_format layout="event" %}
+                <legend id="settings">{% translate "Export settings" %}</legend>
+                {{ form.export_format.as_field_group }}
             </fieldset>
 
             {% include "orga/includes/submit_row.html" %}
-
         </form>
-
-    </div>
-    <div role="tabpanel" id="tabpanel-api" aria-labelledby="tab-api" tabindex="0" aria-hidden="true">
+    </section>
+    <section role="tabpanel" id="tabpanel-api" aria-labelledby="tab-api" tabindex="0" aria-hidden="true">
         <p>
-            {% translate "You can also use the API to export or use data." %}
+            {{ phrases.orga.api_export_hint }}
         </p>
 
         <p>
-            {% blocktranslate trimmed %}
-                Some of the general exports are only accessible for organisers, or include
-                more information when accessed with your organiser account. If you want to
-                access the organiser version in automatic integrations, you’ll have to
-                provide your authentication token just like in the API, like this:
-            {% endblocktranslate %}
+            {{ phrases.orga.export_organiser_access }}
         </p>
 
-            <pre> curl -H "Authorization: Token {{ request.user.auth_token.key }}" {{ request.event.api_urls.reviews.full }} </pre>
+        <pre> curl -H “Authorization: Token INSERTAUTHTOKENHERE” {{ request.event.api_urls.reviews.full }}
+ curl -H “Authorization: Token INSERTTOKENHERE” {{ request.event.api_urls.schedules.full }}latest/exporters/speakers.csv/ </pre>
 
-        <div class="submit-group"><span></span><span>
-            <a class="btn btn-lg btn-info" href="https://docs.pretalx.org/en/latest/api/index.html">
-                <i class="fa fa-book"></i>
-                {% translate "Documentation" %}
-            </a>
-            <a class="btn btn-lg btn-success" href="{{ request.event.api_urls.base }}">
-                {% translate "Go to API" %}
-            </a>
-        </span>
-        </div>
-    </div>
-    <script defer src="{% static "orga/js/speaker_export.js" %}"></script>
+        <p>
+            {{ phrases.orga.export_api_note }}
+        </p>
+
+        {% include "orga/includes/submit_row.html" with submit_buttons=api_buttons %}
+    </section>
 {% endblock content %}

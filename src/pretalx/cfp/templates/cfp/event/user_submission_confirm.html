@@ -1,58 +1,50 @@
 {% extends "cfp/event/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load bootstrap4 %}
-{% load compress %}
+{% load form_media %}
 {% load i18n %}
-{% load static %}
 
-{% block title %}{{ submission.title }} :: {% endblock title %}
+{% block title %}{{ submission.title }} ::
+{% endblock title %}
 
-{% block cfp_header %}
-    {% include "cfp/includes/forms_header.html" %}
-{% endblock cfp_header %}
+{% block scripts %}
+    {% form_media always_base=True %}
+{% endblock scripts %}
 
 {% block content %}
     <div class="col-md-10 ml-auto mr-auto">
-
         {% include "cfp/includes/user_submission_header.html" %}
 
         <div class="text">
-            {% blocktranslate trimmed %}
-                Congratulations on your acceptance!
-            {% endblocktranslate %}
+            <p>
+                <strong>
+                    {% blocktranslate trimmed %}
+                        Congratulations on your acceptance!
+                    {% endblocktranslate %}
+                </strong>
+            </p>
+            <p>
+                {% blocktranslate trimmed %}
+                    By confirming your proposal, you agree that you are able and willing to participate in this event
+                    and present the content of this proposal. The proposal data, such as title, abstract, description,
+                    and any uploads you provided, can be made publicly available once the proposal is confirmed.
+                {% endblocktranslate %}
+            </p>
+        </div>
+        <div>
             {% if form.availabilities %}
                 {% blocktranslate trimmed %}
-                    Please provide us with your available hours during the event, so that we can schedule your event accordingly:
+                    Please provide us with your available hours during the event, so that we can schedule your session
+                    accordingly:
                 {% endblocktranslate %}
                 <p></p>
             {% endif %}
         </div>
-        <form method="post" class="availability-form">
-            {% csrf_token %}
-            {% if form.availabilities %}
-
-                {% include "common/availabilities.html" %}
-
-                {% bootstrap_field form.availabilities layout="inline" %}
-                <div class="text-muted">{{ form.availabilities.help_text }}</div>
-            {% endif %}
-            <p></p>
-            {% blocktranslate trimmed %}
-                By confirming your proposal, you agree that you are able and willing to participate in this event and
-                present the content of this proposal.
-                The proposal data, such as title, abstract, description, and any uploads you provided, can be made
-                publicly available once the proposal is confirmed.
-            {% endblocktranslate %}
-            <p></p>
-            <div class="submit-group">
-                <span>
-                    <a href="{{ submission.urls.user_base }}" class="btn btn-lg btn-info">{{ phrases.base.back_button }}</a>
-                    <a href="{{ submission.urls.withdraw }}" class="btn btn-lg btn-danger">{% translate "Withdraw" %}</a>
-                </span>
-                <span>
-                    <button type="submit" class="btn btn-lg btn-success">{% translate "Confirm" %}</button>
-                </span>
-            </div>
-        </form>
+        <div class="availability-form hide-label">
+            {% include "orga/includes/base_form.html" %}
+        </div>
     </div>
 {% endblock content %}

@@ -1,3 +1,6 @@
+.. SPDX-FileCopyrightText: 2017-present Tobias Kunze
+.. SPDX-License-Identifier: CC-BY-SA-4.0
+
 .. _`rest-api`:
 
 API documentation
@@ -14,4 +17,5 @@ over time.
    :maxdepth: 2
 
    fundamentals
-   resources/index
+   resources
+   changelog

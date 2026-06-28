@@ -1,10 +1,17 @@
-from django.dispatch import receiver
+# SPDX-FileCopyrightText: 2019-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
 
-from pretalx.common.signals import register_data_exporters
+from django.dispatch import Signal
 
+delete_user = Signal()
+"""
+This signal is sent out when a user is deleted - both when deleted on the
+frontend ("deactivated") and actually removed ("shredded").
 
-@receiver(register_data_exporters, dispatch_uid="exporter_builtin_csv_speaker")
-def register_speaker_csv_exporter(sender, **kwargs):
-    from pretalx.person.exporters import CSVSpeakerExporter
+You will get the user as a keyword argument ``user``. Receivers are expected to
+delete any personal information they might have stored about this user.
 
-    return CSVSpeakerExporter
+Additionally, you will get the keyword argument ``db_delete`` when the user
+object will be deleted from the database. If you have any foreign keys to the
+user object, you should delete them here.
+"""

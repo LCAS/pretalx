@@ -1,4 +1,8 @@
-import logging
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: Raphael Michel
 
 from django.contrib import messages
 from django.db import transaction
@@ -9,25 +13,34 @@ from django.utils.crypto import get_random_string
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 
+from pretalx.cfp.flow import cfp_session
 from pretalx.cfp.views.event import EventPageMixin
-from pretalx.common.exceptions import SendMailException
-from pretalx.common.text.phrases import phrases
 
 
 class SubmitStartView(EventPageMixin, View):
     @staticmethod
     def get(request, *args, **kwargs):
+        tmpid = request.resolver_match.kwargs.get("tmpid", get_random_string(length=6))
         url = reverse(
             "cfp:event.submit",
             kwargs={
                 "event": request.event.slug,
-                "step": list(request.event.cfp_flow.steps_dict.keys())[0],
-                "tmpid": get_random_string(length=6),
+                "step": next(iter(request.event.cfp_flow.steps_dict.keys())),
+                "tmpid": tmpid,
             },
         )
         if request.GET:
             url += f"?{request.GET.urlencode()}"
         return redirect(url)
+
+
+class SubmitRestartView(EventPageMixin, View):
+    @staticmethod
+    def get(request, *args, **kwargs):
+        request.resolver_match.kwargs["tmpid"] = get_random_string(length=6)
+        cfp_session_data = cfp_session(request)
+        cfp_session_data["code"] = request.resolver_match.kwargs["code"]
+        return SubmitStartView.get(request, *args, **kwargs)
 
 
 class SubmitWizard(EventPageMixin, View):
@@ -46,6 +59,7 @@ class SubmitWizard(EventPageMixin, View):
             return redirect(
                 reverse("cfp:event.start", kwargs={"event": request.event.slug})
             )
+        step = None
         for step in request.event.cfp_flow.steps:
             if not step.is_applicable(request):
                 continue
@@ -54,11 +68,21 @@ class SubmitWizard(EventPageMixin, View):
             step.is_before = True
             step.resolved_url = step.get_step_url(request)
         if getattr(step, "is_before", False):  # The current step URL is incorrect
-            raise Http404()
+            raise Http404
         handler = getattr(step, request.method.lower(), self.http_method_not_allowed)
         result = handler(request)
 
-        if request.method == "POST" and request.POST.get("action", "submit") == "draft":
+        if request.method == "POST" and (
+            request.POST.get("action", "submit") == "draft"
+            or (step.identifier == "user" and request.GET.get("draft") == "1")
+        ):
+            # Check if the current step is valid before saving as draft
+            # If the form is invalid, the handler already displayed errors and returned
+            # the form page, so we should return that result instead of trying to save
+            step.request = request
+            if not step.is_completed(request):
+                # Form is invalid, return the error page that was already rendered by the handler
+                return result
             return self.done(
                 request,
                 draft=True,
@@ -74,7 +98,7 @@ class SubmitWizard(EventPageMixin, View):
             step.get_next_applicable(request) or not step.is_completed(request)
         ):
             if result and (csp_change := step.get_csp_update(request)):
-                result._csp_update = csp_change
+                result._csp_update = csp_change  # noqa: SLF001 -- django-csp convention
             return result
         return self.done(request)
 
@@ -94,13 +118,6 @@ class SubmitWizard(EventPageMixin, View):
         for step in valid_steps:
             if step.identifier != "user":
                 step.done(request, draft=draft)
-
-        if not draft:
-            try:
-                request.submission.send_initial_mails(person=request.user)
-            except SendMailException as exception:
-                logging.getLogger("").warning(str(exception))
-                messages.warning(request, phrases.cfp.submission_email_fail)
 
         return redirect(
             reverse("cfp:event.user.submissions", kwargs={"event": request.event.slug})

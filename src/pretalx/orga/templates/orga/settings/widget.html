@@ -1,54 +1,45 @@
 {% extends "orga/settings/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2019-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load bootstrap4 %}
-{% load compress %}
+{% load event_tags %}
 {% load i18n %}
 {% load static %}
 
-{% block extra_title %}{% translate "Widget generation" %} :: {% endblock extra_title %}
-
-{% block stylesheets %}
-    {% compress css %}
-        <link rel="stylesheet" href="{% static "common/css/dialog.css" %}">
-    {% endcompress %}
-{% endblock stylesheets %}
+{% block extra_title %}{% translate "Widget generation" %} ::
+{% endblock extra_title %}
 
 {% block scripts %}
-    {% compress js %}
-        <script defer src="{% static "orga/js/widgetSettings.js" %}"></script>
-        <script defer src="{% static "common/js/modalDialog.js" %}"></script>
-    {% endcompress %}
+    <script defer src="{% static 'common/js/ui/dialog.js' %}"></script>
 {% endblock scripts %}
 
 {% block settings_content %}
-    <form method="post" class="d-flex flex-column">
-        {% csrf_token %}
+    <h2>
+        {% translate "Widget settings" %}
+        <span data-dialog-target="#info-dialog" data-toggle="dialog">
+            <i class="fa fa-question-circle-o text-info"></i>
+        </span>
+    </h2>
+    <dialog id="info-dialog" closedby="any">
+        <div class="alert alert-info flip ml-auto">
+            {% blocktranslate trimmed %}
+                You can configure a pretalx schedule widget to show your event schedule on your homepage, instead of
+                using this page. If you want to disable the schedule on here entirely, please activate the setting
+                below.
+            {% endblocktranslate %}
+        </div>
+    </dialog>
 
-        <h2>
-            {% translate "Widget settings" %}
-            <span class="dialog-anchor" data-target="#info-dialog" data-toggle="dialog">
-                <i class="fa fa-question-circle-o text-info"></i>
-            </span>
-        </h2>
-        <dialog id="info-dialog">
-            <div class="alert alert-info flip ml-auto">
-                {% blocktranslate trimmed %}
-                    You can configure a pretalx schedule widget to show your event schedule
-                    on your homepage, instead of using this page. If you want to disable the
-                    schedule on here entirely, please activate the setting below.
-                {% endblocktranslate %}
-            </div>
-        </dialog>
-        {% bootstrap_form form layout="event" %}
-
-        {% include "orga/includes/submit_row.html" %}
-
-    </form>
+    {% include "orga/includes/base_form.html" %}
 
     <h2>{% translate "Widget generation" %}</h2>
     <p>
         {% blocktranslate trimmed %}
-            The pretalx schedule widget is a way to embed your schedule into your event website. This way, your attendees can see your schedule without leaving your website, and you can style the schedule to fit right in with your website.
+            The pretalx schedule widget is a way to embed your schedule into your event website. This way, your
+            attendees can see your schedule without leaving your website, and you can style the schedule to fit right in
+            with your website.
         {% endblocktranslate %}
     </p>
 
@@ -58,20 +49,14 @@
                 Using this form, you can generate code to copy and paste to your website source.
             {% endblocktranslate %}
         </p>
-        <form>
-            {% bootstrap_form extra_form layout="event" %}
-        </form>
-        <div class="submit-group panel">
-            <span></span>
-            <span>
-                <button id="generate-widget" class="btn btn-info btn-lg">{% translate "Generate widget" %}</button>
-            </span>
-        </div>
+        {{ extra_form }}
+        {% include "orga/includes/submit_row.html" with submit_buttons=generate_submit %}
     </div>
     <div id="generated-widget" class="d-none">
         <p>
             {% blocktranslate trimmed %}
-                To embed the widget into your website, copy the following code to the <code>&lt;head></code> section of your website:
+                To embed the widget into your website, copy the following code to the <code>&lt;head></code> section of
+                your website:
             {% endblocktranslate %}
         </p>
         <pre id="widget-head">
@@ -82,7 +67,7 @@
             {% endblocktranslate %}
         </p>
         <pre id="widget-body">
-&lt;pretalx-schedule event-url="{{ request.event.urls.base.full }}" locale="LOCALE" format="FORMAT" style="--pretalx-clr-primary: {{ request.event.get_primary_color }}">&lt;/pretalx-schedule>
+&lt;pretalx-schedule event-url="{{ request.event.urls.base.full }}" locale="LOCALE" format="FORMAT" style="--pretalx-clr-primary: {{ request.event.visible_primary_color }}"FILTER_DATA>&lt;/pretalx-schedule>
 &lt;noscript>
    &lt;div class="pretalx-widget">
         &lt;div class="pretalx-widget-info-message">
@@ -96,13 +81,12 @@
                 <i class="fa fa-info-circle"></i>
             </span>
             {% blocktranslate trimmed with link="https://docs.pretalx.org/user/event/widget.html" %}
-
                 Please look at <a href="{{ link }}">our documentation</a> for more information.
             {% endblocktranslate %}
         </p>
     </div>
 
-    {% if request.event.is_public and request.event.feature_flags.show_schedule and request.event.current_schedule and not request.event.custom_domain %}
+    {% if request.event.is_public and request.event|get_feature_flag:"show_schedule" and request.event.current_schedule and not request.event.custom_domain %}
         <div class="mw-100">
             <h2>{% translate "Widget preview" %}</h2>
             <p>
@@ -110,14 +94,20 @@
                     This is roughly what your widget will look like if you choose the grid format:
                 {% endblocktranslate %}
             </p>
-            <pretalx-schedule event-url="{{ request.event.urls.base }}" locale="{{ request.event.locale }}" style="--pretalx-clr-primary: {{ request.event.primary_color|default:"#3aa57c" }}"></pretalx-schedule>
-      </div>
-   <script type="text/javascript" src="{{ request.event.urls.schedule_widget_script }}" async></script>
+            <pretalx-schedule
+                event-url="{{ request.event.urls.base.full }}"
+                locale="{{ request.event.locale }}"
+                style="--pretalx-clr-primary: {{ request.event.visible_primary_color }}"
+            ></pretalx-schedule>
+        </div>
+        <script type="text/javascript" src="{{ request.event.urls.schedule_widget_script }}" async></script>
         <noscript>
-           <div class="pretalx-widget">
+            <div class="pretalx-widget">
                 <div class="pretalx-widget-info-message">
-                    JavaScript is disabled in your browser. To access our schedule without JavaScript,
-                    please <a target="_blank" href="{{ request.event.urls.schedule.full }}">click here</a>.
+                    JavaScript is disabled in your browser. To access our schedule without JavaScript, please <a
+                        target="_blank"
+                        href="{{ request.event.urls.schedule.full }}"
+                    >click here</a>.
                 </div>
             </div>
         </noscript>

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.template.defaultfilters import date as _date
 from django.utils.translation import get_language
 from django.utils.translation import gettext_lazy as _
@@ -23,11 +26,11 @@ def daterange_en(date_from, date_to):
         and date_from.month == date_to.month
         and date_from.day == date_to.day
     ):
-        return str(_date(date_from, "N jS, Y"))
+        return str(_date(date_from, "N j, Y"))
     if date_from.year == date_to.year and date_from.month == date_to.month:
-        return "{} – {}".format(_date(date_from, "N jS"), _date(date_to, "jS, Y"))
+        return "{} – {}".format(_date(date_from, "N j"), _date(date_to, "j, Y"))
     if date_from.year == date_to.year:
-        return "{} – {}".format(_date(date_from, "N jS"), _date(date_to, "N jS, Y"))
+        return "{} – {}".format(_date(date_from, "N j"), _date(date_to, "N j, Y"))
     return ""
 
 
@@ -58,11 +61,7 @@ def daterange_es(date_from, date_to):
 
 def daterange(date_from, date_to):
     language = get_language()[:2]
-    lookup = {
-        "de": daterange_de,
-        "en": daterange_en,
-        "es": daterange_es,
-    }
+    lookup = {"de": daterange_de, "en": daterange_en, "es": daterange_es}
     function = lookup.get(language)
     result = function(date_from, date_to) if function else None
     return result or _("{date_from} – {date_to}").format(

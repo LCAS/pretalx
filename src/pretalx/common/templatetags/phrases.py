@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2024-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django import template
 from django.utils.safestring import mark_safe
 
@@ -17,4 +20,4 @@ def phrase(phrase_name, **kwargs):
         return text
     # Due to being previously used in templates, most phrases are formatted
     # with old % formatting.
-    return mark_safe(str(text) % kwargs)
+    return mark_safe(str(text) % kwargs)  # noqa: S308  -- translated phrases with safe substitutions

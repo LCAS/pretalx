@@ -1,37 +1,49 @@
+# SPDX-FileCopyrightText: 2019-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
+import smtplib
 import sys
 
-from csp.decorators import csp_update
 from django.conf import settings
 from django.contrib import messages
+from django.core import cache
 from django.db.models import Count, Q
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from django.views.generic import DetailView, FormView, ListView, TemplateView
+from django.views.generic import FormView, TemplateView, View
 from django_context_decorator import context
 from django_scopes import scopes_disabled
 
 from pretalx.celery_app import app
+from pretalx.common.domain.queries.log import actions_by
+from pretalx.common.exceptions import UserDeletionError
 from pretalx.common.models.settings import GlobalSettings
 from pretalx.common.text.phrases import phrases
 from pretalx.common.update_check import check_result_table, update_check
-from pretalx.common.views.mixins import ActionConfirmMixin, PermissionRequired
+from pretalx.common.views.generic import OrgaCRUDView
+from pretalx.common.views.mixins import PermissionRequired
+from pretalx.mail.tasks import task_send_transient
 from pretalx.orga.forms.admin import UpdateSettingsForm
+from pretalx.orga.tables.admin import AdminUserTable
+from pretalx.person.domain.user import deactivate_user, reset_password, shred_user
 from pretalx.person.models import User
+from pretalx.submission.models import Submission
 
 
 class AdminDashboard(PermissionRequired, TemplateView):
     template_name = "orga/admin/admin.html"
-    permission_required = "person.is_administrator"
+    permission_required = "person.administrator_user"
 
     @context
     def queue_length(self):
-        if not settings.HAS_CELERY:
+        if settings.CELERY_TASK_ALWAYS_EAGER:
             return None
         try:
             client = app.broker_connection().channel().client
-            return client.llen("celery")
-        except Exception as e:
+            return client.llen("celery")  # pragma: no cover — requires live broker
+        except OSError as e:
             return str(e)
 
     @context
@@ -43,9 +55,52 @@ class AdminDashboard(PermissionRequired, TemplateView):
         return settings.PRETALX_VERSION
 
 
+class TestMailView(PermissionRequired, View):
+    permission_required = "person.administrator_user"
+
+    def post(self, request, *args, **kwargs):
+        if not settings.ADMINS:
+            messages.error(
+                request,
+                _(
+                    "No administrator email addresses are configured. "
+                    "Please set the 'email' option in the [logging] section of your configuration."
+                ),
+            )
+            return redirect(reverse("orga:admin.dashboard"))
+
+        admin_emails = list(settings.ADMINS)
+
+        try:
+            task_send_transient.apply(
+                kwargs={
+                    "to": admin_emails,
+                    "subject": str(_("pretalx test email")),
+                    "body": str(
+                        _(
+                            "This is a test email from pretalx to verify your system email configuration is working correctly."
+                        )
+                    ),
+                    "html": None,
+                }
+            )
+            messages.success(
+                request,
+                _("Test email sent successfully to: {emails}").format(
+                    emails=", ".join(admin_emails)
+                ),
+            )
+        except (OSError, smtplib.SMTPException) as e:
+            messages.error(
+                request, _("Failed to send test email: {error}").format(error=str(e))
+            )
+
+        return redirect(reverse("orga:admin.dashboard"))
+
+
 class UpdateCheckView(PermissionRequired, FormView):
     template_name = "orga/admin/update.html"
-    permission_required = "person.is_administrator"
+    permission_required = "person.administrator_user"
     form_class = UpdateSettingsForm
 
     def post(self, request, *args, **kwargs):
@@ -60,9 +115,7 @@ class UpdateCheckView(PermissionRequired, FormView):
         return super().form_valid(form)
 
     def form_invalid(self, form):
-        messages.error(
-            self.request, _("Your changes have not been saved, see below for errors.")
-        )
+        messages.error(self.request, phrases.base.error_saving_changes)
         return super().form_invalid(form)
 
     def get_context_data(self, **kwargs):
@@ -79,72 +132,41 @@ class UpdateCheckView(PermissionRequired, FormView):
         return reverse("orga:admin.update")
 
 
-class AdminUserList(PermissionRequired, ListView):
-    template_name = "orga/admin/user_list.html"
-    permission_required = "person.is_administrator"
+class AdminUserView(OrgaCRUDView):
     model = User
-    context_object_name = "users"
-    paginate_by = "250"
-
-    def dispatch(self, *args, **kwargs):
-        with scopes_disabled():
-            return super().dispatch(*args, **kwargs)
+    table_class = AdminUserTable
+    permission_required = "person.administrator_user"
+    paginate_by = 250
+    lookup_field = "code"
+    path_converter = "slug"
+    template_namespace = "orga/admin"
+    extra_actions = {"detail": {"get": "detail", "post": "trigger_password_reset"}}
+    detail_is_update = False
 
     def get_queryset(self):
-        search = self.request.GET.get("q", "").strip()
-        if not search or len(search) < 3:
-            return User.objects.none()
-        return (
-            User.objects.filter(Q(name__icontains=search) | Q(email__icontains=search))
-            .prefetch_related(
-                "teams",
-                "teams__organiser",
-                "teams__organiser__events",
-                "teams__limit_events",
+        if self.action == "list":
+            search = self.request.GET.get("q", "").strip()
+            if not search or len(search) < 3:
+                return User.objects.none()
+            qs = User.objects.filter(
+                Q(name__icontains=search) | Q(email__icontains=search)
             )
-            .annotate(
-                submission_count=Count("submissions", distinct=True),
-            )
-        )
+        else:
+            qs = User.objects.all()
+        return qs.prefetch_related(
+            "teams",
+            "teams__organiser",
+            "teams__organiser__events",
+            "teams__limit_events",
+        ).annotate(submission_count=Count("profiles__submissions", distinct=True))
 
-    def post(self, request, *args, **kwargs):
-        action = request.POST.get("action") or "-"
-        action, user_id = action.split("-")
-        user = User.objects.get(pk=user_id)
-        if action == "reset":
-            user.reset_password(event=None)
-            messages.success(request, phrases.base.password_reset_success)
-        return super().get(request, *args, **kwargs)
+    def has_permission(self, *args):
+        return self.request.user.is_administrator
 
-
-class AdminUserDetail(PermissionRequired, DetailView):
-    template_name = "orga/admin/user_detail.html"
-    permission_required = "person.is_administrator"
-    model = User
-    context_object_name = "user"
-    slug_url_kwarg = "code"
-    slug_field = "code"
-
-    @csp_update(IMG_SRC="https://www.gravatar.com")
-    def dispatch(self, *args, **kwargs):
-        with scopes_disabled():
-            return super().dispatch(*args, **kwargs)
-
-    def post(self, request, *args, **kwargs):
-        action = request.POST.get("action") or "-"
-        if action == "pw-reset":
-            self.get_object().reset_password(event=None)
-            messages.success(request, phrases.base.password_reset_success)
-        elif action == "deactivate":
-            user = self.get_object()
-            user.is_active = False
-            user.save()
-            messages.success(request, _("The user has been deactivated."))
-        elif action == "activate":
-            user = self.get_object()
-            user.is_active = True
-            user.save()
-            messages.success(request, _("The user has been activated."))
+    def trigger_password_reset(self, request, *args, **kwargs):
+        user = self.get_object()
+        reset_password(user, event=None)
+        messages.success(request, phrases.base.password_reset_success)
         return redirect(self.get_success_url())
 
     def get_success_url(self):
@@ -152,35 +174,41 @@ class AdminUserDetail(PermissionRequired, DetailView):
 
     def get_context_data(self, **kwargs):
         result = super().get_context_data(**kwargs)
-        result["teams"] = self.object.teams.all().prefetch_related(
-            "organiser", "limit_events", "organiser__events"
-        )
-        result["submissions"] = self.object.submissions.all()
+        if self.action == "detail":
+            result["teams"] = self.object.teams.prefetch_related(
+                "organiser", "limit_events", "organiser__events"
+            )
+            with scopes_disabled():
+                result["submissions"] = Submission.objects.filter(
+                    speakers__user=self.object
+                )
+                result["last_actions"] = actions_by(self.object)[:10]
+            result["tablist"] = {
+                "teams": _("Teams"),
+                "submissions": _("Proposals"),
+                "actions": _("Last actions"),
+            }
         return result
 
+    def get_generic_title(self, instance=None):
+        if instance:
+            return instance.name
+        return _("Users")
 
-class AdminUserDelete(ActionConfirmMixin, AdminUserDetail):
-
-    @property
-    def action_object_name(self):
-        return _("User") + f": {self.get_object().name}"
-
-    @property
-    def action_next_url(self):
-        return self.get_success_url()
-
-    @property
-    def action_back_url(self):
-        return reverse("orga:admin.user.view", kwargs={"code": self.get_object().code})
-
-    def dispatch(self, *args, **kwargs):
+    def perform_delete(self):
         with scopes_disabled():
-            return super().dispatch(*args, **kwargs)
+            try:
+                shred_user(self.object)
+            except UserDeletionError:
+                deactivate_user(self.object)
+        messages.success(self.request, _("The user has been deleted."))
 
-    def post(self, request, *args, **kwargs):
-        self.get_object().shred()
-        messages.success(request, _("The user has been deleted."))
-        return redirect(self.get_success_url())
 
-    def get_success_url(self):
-        return reverse("orga:admin.user.list")
+def healthcheck(request):
+    User.objects.exists()
+
+    cache.cache.set("_healthcheck", "1")
+    if cache.cache.get("_healthcheck") != "1":
+        return HttpResponse("Cache not available.", status=503)
+
+    return HttpResponse()

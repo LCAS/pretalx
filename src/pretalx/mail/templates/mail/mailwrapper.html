@@ -1,3 +1,8 @@
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
+
 {% load i18n %}
 {% load rich_text %}
 
@@ -5,7 +10,7 @@
 <html>
     <head>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, user-scalable=false">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
     </head>
     <style type="text/css">
         body {
@@ -114,7 +119,7 @@
 
         {% block addcss %}{% endblock addcss %}
     </style>
-    <body{% if rtl %} dir="rtl" class="rtl"{% endif %}>
+    <body {% if rtl %}dir="rtl" class="rtl"{% endif %}>
         <table width="600" cellspacing="0" border="0" class="layout">
             <tr>
                 <td class="header" background="" align="center">
@@ -133,18 +138,16 @@
             </tr>
             {% if signature and signature.strip %}
                 <tr class="signature">
-                    <td>{{ signature|rich_text }}</td>
+                    <td>{{ signature|rich_text_abslinks }}</td>
                 </tr>
             {% else %}
                 <tr class="last"></tr>
             {% endif %}
         </table>
         <div class="footer">
-
-            {% include "common/powered_by.html" %}
-
+            {% include "common/powered_by.html" with secure_link="https://pretalx.com" %}
         </div>
-        <br />
-        <br />
+        <br>
+        <br>
     </body>
 </html>

@@ -1,32 +1,38 @@
+<!--
+SPDX-FileCopyrightText: 2022-present Tobias Kunze
+SPDX-License-Identifier: Apache-2.0
+-->
+
 <template lang="pug">
-.c-grid-schedule()
+.c-grid-schedule(:class="{'condensed-grid': displayMode === 'condensed'}")
 	.grid(ref="grid", :style="gridStyle", :class="gridClasses", @pointermove="updateHoverSlice($event)", @pointerup="stopDragging($event)")
-		template(v-for="slice of visibleTimeslices")
+		template(v-for="slice of visibleTimeslices", :key="slice.name")
 			.timeslice(:ref="slice.name", :class="getSliceClasses(slice)", :data-slice="slice.date.format()", :style="getSliceStyle(slice)", @click="expandTimeslice(slice)") {{ getSliceLabel(slice) }}
-				svg(viewBox="0 0 10 10", v-if="isSliceExpandable(slice)").expand
+				svg(v-if="isSliceExpandable(slice)", viewBox="0 0 10 10").expand
 					path(d="M 0 4 L 5 0 L 10 4 z")
 					path(d="M 0 6 L 5 10 L 10 6 z")
 			.timeseparator(:class="getSliceClasses(slice)", :style="getSliceStyle(slice)")
 		.room(:style="{'grid-area': `1 / 1 / auto / auto`}")
-		.room(v-for="(room, index) of visibleRooms", :style="{'grid-area': `1 / ${index + 2 } / auto / auto`}")
+		.room(v-for="(room, index) of visibleRooms", :key="room.id", :style="{'grid-area': `1 / ${index + 2 } / auto / auto`}")
 			span {{ getLocalizedString(room.name) }}
 			.hide-room.no-print(v-if="visibleRooms.length > 1", @click="hiddenRooms = rooms.filter(r => hiddenRooms.includes(r) || r === room)")
 				i.fa.fa-eye-slash
-		session(v-if="draggedSession && hoverSlice", :style="getHoverSliceStyle()", :session="draggedSession", :isDragClone="true", :overrideStart="hoverSlice.time")
-		template(v-for="session of visibleSessions")
+		session(v-if="draggedSession && hoverSlice", :style="getHoverSliceStyle()", :session="draggedSession", :isDragClone="true", :overrideStart="hoverSlice.time", :displayMode="displayMode")
+		template(v-for="session of visibleSessions", :key="session.id")
 			session(
 				:session="session",
 				:warnings="session.code ? warnings[session.code] : []",
 				:isDragged="draggedSession && (session.id === draggedSession.id)",
 				:style="getSessionStyle(session)",
 				:showRoom="false",
+				:displayMode="displayMode",
 				@startDragging="startDragging($event)",
 			)
-		.availability(v-for="availability of visibleAvailabilities", :style="getSessionStyle(availability)", :class="availability.active ? ['active'] : []")
-	#hiddenRooms.no-print(v-if="hiddenRooms.length")
+		.availability(v-for="availability, index of visibleAvailabilities", :key="index", :style="getSessionStyle(availability)", :class="availability.active ? ['active'] : []")
+	#hiddenRooms.collapse-container.no-print(v-if="hiddenRooms.length")
 		h4 {{ $t('Hidden rooms') }} ({{ hiddenRooms.length }})
-		.room-list
-			.room-entry(v-for="room of hiddenRooms", @click="hiddenRooms.splice(hiddenRooms.indexOf(room), 1)")
+		.room-list.collapse-content
+			.room-entry(v-for="room of hiddenRooms", :key="room.id", @click="hiddenRooms.splice(hiddenRooms.indexOf(room), 1)")
 				.span {{ getLocalizedString(room.name) }}
 				.show-room(@click.stop="hiddenRooms.splice(hiddenRooms.indexOf(room), 1)")
 					i.fa.fa-eye
@@ -51,8 +57,17 @@ export default {
 		end: Object,
 		rooms: Array,
 		currentDay: Object,
-		draggedSession: Object
+		draggedSession: Object,
+		displayMode: {
+			type: String,
+			default: 'expanded'
+		},
+		gridInterval: {
+			type: Number,
+			default: 30
+		}
 	},
+	emits: ['startDragging', 'editSession', 'createSession', 'rescheduleSession', 'changeDay'],
 	data () {
 		return {
 			moment,
@@ -63,6 +78,9 @@ export default {
 			gridOffset: 0,
 			dragScrollTimer: null,
 			dragStart: null,
+			// Latest pointer event during a drag, read by the auto-scroll
+			// interval (dragOnScroll). Local state, not a prop mutation.
+			dragEvent: null,
 			hiddenRooms: [],
 		}
 	},
@@ -92,7 +110,7 @@ export default {
 			return null
 		},
 		timeslices () {
-			const minimumSliceMins = 30
+			const minimumSliceMins = this.gridInterval
 			const slices = []
 			const slicesLookup = {}
 			const pushSlice = function (date, {hasStart = false, hasEnd = false, hasSession = false, isExpanded = false} = {}) {
@@ -164,12 +182,16 @@ export default {
 			if (this.hoverEndSlice) pushSlice(this.hoverEndSlice, {hasEnd: true})
 			const sliceIsFraction = function (slice) {
 				if (!slice) return
-				return slice.date.minutes() !== 0 && slice.date.minutes() !== minimumSliceMins
+				return slice.date.minutes() % minimumSliceMins !== 0
 			}
 			const sliceShouldDisplay = function (slice, index) {
 				if (!slice) return
 				// keep slices with sessions or when changing dates, or when sessions start or immediately after they end
 				if (slice.hasSession || slice.datebreak || slice.hasStart || slice.hasEnd || slice.isExpanded) return true
+				// keep slices that match explicit room availability times
+				for (const availTime of this.explicitAvailabilityTimes) {
+					if (slice.date.isSame(availTime)) return true
+				}
 				// keep slices between 9 and 18 o'clock
 				if (slice.date.hour() >= 9 && slice.date.hour() < 19) return true
 				const prevSlice = slices[index - 1]
@@ -186,7 +208,7 @@ export default {
 				// but drop slices inside breaks
 				if (prevSlice?.hasBreak && slice.hasBreak) return false
 				return false
-			}
+			}.bind(this)
 			slices.sort((a, b) => a.date.diff(b.date))
 			const compactedSlices = []
 			for (const [index, slice] of slices.entries()) {
@@ -206,29 +228,73 @@ export default {
 		visibleTimeslices () {
 			// Inside normal conference hours, from 9am to 6pm, we show all half and full hour marks, plus all dates that were click-expanded, plus all start times of talks
 			// Outside, we only show the first slice, which can be expanded
-		  return this.timeslices.filter(slice => {
-			  return slice.date.minute() % 30 === 0 || this.expandedTimes.includes(slice.date) || this.oddTimeslices.includes(slice.date)
-		  })
+			return this.timeslices.filter(slice => {
+				return slice.date.minute() % this.gridInterval === 0 || this.expandedTimes.includes(slice.date) || this.oddTimeslices.includes(slice.date) || this.explicitAvailabilityTimes.some(availTime => slice.date.isSame(availTime))
+			})
 		},
 		oddTimeslices () {
 			const result = []
 			this.sessions.forEach(session => {
-				if (session.start.minute() % 30 !== 0) result.push(session.start)
-				if (session.end.minute() % 30 !== 0) result.push(session.end)
+				if (session.start.minute() % this.gridInterval !== 0) result.push(session.start)
+				if (session.end.minute() % this.gridInterval !== 0) result.push(session.end)
 			})
 			return [...new Set(result)]
 		},
+		explicitAvailabilityTimes () {
+			const result = []
+			const seen = new Set()
+			for (const room of this.visibleRooms) {
+				if (this.availabilities.rooms[room.id] && this.availabilities.rooms[room.id].length) {
+					for (const avail of this.availabilities.rooms[room.id]) {
+						const startTime = moment(avail.start)
+						const endTime = moment(avail.end)
+
+						// Add boundary times
+						const startKey = startTime.format()
+						const endKey = endTime.format()
+						if (!seen.has(startKey)) {
+							seen.add(startKey)
+							result.push(startTime)
+						}
+						if (!seen.has(endKey)) {
+							seen.add(endKey)
+							result.push(endTime)
+						}
+
+						// Add intervals within the availability range
+						const current = startTime.clone()
+						while (current.isBefore(endTime)) {
+							current.add(this.gridInterval, 'minutes')
+							if (current.isSameOrBefore(endTime)) {
+								const intervalKey = current.format()
+								if (!seen.has(intervalKey)) {
+									seen.add(intervalKey)
+									result.push(current.clone())
+								}
+							}
+						}
+					}
+				}
+			}
+			return result
+		},
 		gridStyle () {
-			let rows = '[header] 52px '
+			const headerHeight = this.displayMode === 'condensed' ? 40 : 52
+			const baseMultiplier = this.displayMode === 'condensed' ? 1.2 : 2
+			const maxHeight = this.displayMode === 'condensed' ? 40 : 60
+			const gapHeight = this.displayMode === 'condensed' ? 60 : 100
+			const datebreakHeight = this.displayMode === 'condensed' ? 40 : 60
+
+			let rows = `[header] ${headerHeight}px `
 			rows += this.timeslices.map((slice, index) => {
 				const next = this.timeslices[index + 1]
-				let height = 60
+				let height = maxHeight
 				if (slice.gap) {
-					height = 100
+					height = gapHeight
 				} else if (slice.datebreak) {
-					height = 60
+					height = datebreakHeight
 				} else if (next) {
-					height = Math.min(60, next.date.diff(slice.date, 'minutes') * 2)
+					height = Math.max(12, Math.min(maxHeight, next.date.diff(slice.date, 'minutes') * baseMultiplier))
 				}
 				return `[${slice.name}] minmax(${height}px, auto)`
 			}).join(' ')
@@ -313,7 +379,30 @@ export default {
 		},
 	},
 	watch: {
-		currentDay: 'changeDay'
+		currentDay: 'changeDay',
+		gridInterval () {
+			// Find the first visible full-hour timeslice and remember its viewport offset
+			let anchorSliceName = null
+			let anchorOffset = 0
+			const scrollTop = this.scrollParent.scrollTop
+			for (const slice of this.visibleTimeslices) {
+				if (slice.date.minute() !== 0 || slice.datebreak) continue
+				const el = this.$refs[slice.name]?.[0]
+				if (!el) continue
+				if (el.offsetTop >= scrollTop) {
+					anchorSliceName = slice.name
+					anchorOffset = el.offsetTop - scrollTop
+					break
+				}
+			}
+			this.expandedTimes = []
+			this.$nextTick(() => {
+				if (!anchorSliceName) return
+				const el = this.$refs[anchorSliceName]?.[0]
+				if (!el) return
+				this.scrollParent.scrollTop = el.offsetTop - anchorOffset
+			})
+		}
 	},
 	async mounted () {
 		await this.$nextTick()
@@ -353,7 +442,7 @@ export default {
 			const start = this.hoverSlice.time
 			const end = this.hoverSlice.time.clone().add(this.draggedSession.duration, 'm')
 			if (!this.draggedSession.id) {
-			  this.$emit('createSession', {session: {...this.draggedSession, start: start.format(), end: end.format(), room: this.hoverSlice.room.id}})
+				this.$emit('createSession', {session: {...this.draggedSession, start: start.format(), end: end.format(), room: this.hoverSlice.room.id}})
 			} else {
 				this.$emit('rescheduleSession', {session: this.draggedSession, start: start.format(), end: end.format(), room: this.hoverSlice.room})
 			}
@@ -366,12 +455,12 @@ export default {
 				this.expandedTimes.push(slice.date.clone().add(5, 'm'))
 			} else {
 				const end = this.visibleTimeslices[index + 1].date.clone()
-				// if next time slice is within 30 minutes, set interval to 5 minutes, otherwise to 30 minutes
+				// if next time slice is within the grid interval, set interval to 5 minutes, otherwise to the grid interval
 				let interval = 0
-				if (end.diff(slice.date, 'minutes') <= 30) {
+				if (end.diff(slice.date, 'minutes') <= this.gridInterval) {
 					interval = 5
 				} else {
-					interval = 30
+					interval = this.gridInterval
 				}
 				const time = slice.date.clone().add(interval, 'm')
 				while (time.isBefore(end)) {
@@ -387,9 +476,9 @@ export default {
 				this.dragScrollTimer = setInterval(this.dragOnScroll, 100)
 			}
 			let hoverSlice = null
-			this.draggedSession.event = e
+			this.dragEvent = e
 			// We're grabbing the leftmost point of our y position and searching for the slice element there
-		    // to determine our hover slice's attributes (y axis)
+			// to determine our hover slice's attributes (y axis)
 			for (const element of document.elementsFromPoint(this.gridOffset, e.clientY)) {
 				if (element && element.dataset.slice && element.classList.contains('timeslice')) {
 					hoverSlice = element
@@ -428,6 +517,7 @@ export default {
 			return classes
 		},
 		isSliceExpandable (slice) {
+			if (this.gridInterval <= 5) return false
 			const index = this.visibleTimeslices.indexOf(slice)
 			if (index + 1 === this.visibleTimeslices.length) return false
 			const nextSlice = this.visibleTimeslices[index + 1]
@@ -445,7 +535,7 @@ export default {
 		},
 		getSliceLabel (slice) {
 			if (slice.datebreak) return slice.date.format('ddd[\n]DD. MMM')
-			return slice.date.format('LT')
+			return slice.date.format('H:mm')
 		},
 		changeDay (day) {
 			if (this.scrolledDay === day) return
@@ -467,7 +557,7 @@ export default {
 				return
 			}
 			// get current mouse y position
-			const event = this.draggedSession.event
+			const event = this.dragEvent
 			if (event.clientY - this.staticOffsetTop < 160) {
 				if (event.clientY - this.staticOffsetTop < 90) {
 					this.scrollBy(-200)
@@ -498,7 +588,7 @@ export default {
 	.grid
 		background-color: $clr-grey-50
 		display: grid
-		grid-template-columns: 78px repeat(var(--total-rooms), 1fr) auto
+		grid-template-columns: 78px repeat(var(--total-rooms), minmax(310px, 1fr)) auto
 		// grid-gap: 8px
 		position: relative
 		min-width: min-content
@@ -508,7 +598,7 @@ export default {
 				cursor: not-allowed !important
 		> .room
 			position: sticky
-			top: calc(48px)
+			top: 48px
 			display: flex
 			justify-content: center
 			align-items: center
@@ -537,6 +627,7 @@ export default {
 		background-color: $clr-grey-50
 		border-top: 1px solid $clr-dividers-light
 		z-index: 20
+		font-size: 14px
 		.expand
 			display: none
 		&.datebreak
@@ -568,25 +659,23 @@ export default {
 	pointer-events: none
 	&.active
 		background-color: rgba(56, 158, 119, 0.1)
-#hiddenRooms
-	position: fixed
-	z-index: 500
-	bottom: 0
-	right: 0
-	width: 300px;
-	background-color: $clr-white
-	padding: 8px 16px
-	box-shadow: 0 0 10px rgba(0, 0, 0, 0.3)
-	border-top-left-radius: 8px
-	font-size: 16px
-
-	.room-list
-		display: none
-
-	&:hover
-		.room-list
-			display: block
-
+.c-grid-schedule.condensed-grid
+	.grid
+		grid-template-columns: 58px repeat(var(--total-rooms), minmax(150px, 1fr)) auto
+		> .room
+			font-size: 14px
+			top: 40px
+			padding: 4px
+			.hide-room
+				font-size: 12px
+				margin-left: 8px
+				padding: 2px 6px
+	.timeslice
+		padding: 4px 6px 0 6px
+		font-size: 12px
+		&.datebreak
+			padding-top: 0
+#hiddenRooms.collapse-container
 	.room-entry
 		border-bottom: border-separator()
 		display: flex
@@ -603,4 +692,7 @@ export default {
 			border-radius: 4px
 		&:hover
 			background-color: $clr-grey-100
+
+.condensed-mode #hiddenRooms
+	right: 345px  // 350px unassigned panel - 5px spacing to not overlap the rounded column
 </style>

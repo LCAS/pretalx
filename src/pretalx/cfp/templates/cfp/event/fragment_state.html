@@ -1,19 +1,35 @@
+{% comment %}
+SPDX-FileCopyrightText: 2017-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
+This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+SPDX-FileContributor: Raphael Michel
+{% endcomment %}
+
 {% load i18n %}
 
-{% if state == "submitted" %}
-    <i class="fa fa-inbox"></i> <span class="state-fragment">{{ phrases.submission.submitted }}</span>
-{% elif state == "review" %}
-    <i class="fa fa-inbox"></i> <span class="state-fragment">{{ phrases.submission.in_review }}</span>
-{% elif state == "rejected" %}
-    <i class="fa fa-ban"></i> <span class="state-fragment">{{ phrases.submission.not_accepted }}</span>
-{% elif state == "accepted" %}
-    <i class="fa fa-check-circle"></i> <span class="state-fragment">{% translate "accepted" %}</span>
-{% elif state == "confirmed" %}
-    <i class="fa fa-check-circle"></i> <span class="state-fragment">{% translate "confirmed" %}</span>
-{% elif state == "canceled" %}
-    <i class="fa fa-times-circle"></i> <span class="state-fragment">{% translate "canceled" %}</span>
-{% elif state == "withdrawn" %}
-    <i class="fa fa-times-circle"></i> <span class="state-fragment">{% translate "withdrawn" %}</span>
-{% elif state == "deleted" %}
-    <i class="fa fa-times-circle"></i> <span class="state-fragment">{{ phrases.submission.deleted }}</span>
+{% partialdef state_inner %}
+    {% if state == "submitted" %}
+        <span class="nowrap"><i class="fa fa-inbox"></i> {{ phrases.submission.submitted }}</span>
+    {% elif state == "review" %}
+        <span class="nowrap"><i class="fa fa-inbox"></i> {{ phrases.submission.in_review }}</span>
+    {% elif state == "rejected" %}
+        <span class="nowrap"><i class="fa fa-ban"></i> {{ phrases.submission.not_accepted }}</span>
+    {% elif state == "accepted" %}
+        <span class="nowrap"><i class="fa fa-check-circle"></i> {% translate "accepted" %}</span>
+    {% elif state == "confirmed" %}
+        <span class="nowrap"><i class="fa fa-check-circle"></i> {% translate "confirmed" %}</span>
+    {% elif state == "canceled" %}
+        <span class="nowrap"><i class="fa fa-times-circle"></i>
+            {% translate "Cancelled" as cancelled_label %}{{ cancelled_label|lower }}</span>
+    {% elif state == "withdrawn" %}
+        <span class="nowrap"><i class="fa fa-times-circle"></i> {% translate "withdrawn" %}</span>
+    {% endif %}
+{% endpartialdef %}
+{% if as_badge %}
+    <span class="badge submission-state submission-state-{{ state }}">
+        {% partial state_inner %}
+    </span>
+{% else %}
+    {% partial state_inner %}
 {% endif %}

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.conf import settings
 from django.utils.module_loading import import_string
 
@@ -10,8 +13,8 @@ def collect_signal(signal, kwargs):
     result = []
     for _, response in signal.send_robust(**kwargs):
         if isinstance(response, list):
-            result += response
-        else:
+            result += [r for r in response if not isinstance(r, Exception)]
+        elif not isinstance(response, Exception):
             result.append(response)
     return result
 
@@ -44,6 +47,9 @@ def orga_events(request):
     context["nav_settings"] = collect_signal(
         nav_event_settings, {"sender": request.event, "request": request}
     )
+    context["nav_settings_expanded"] = any(
+        request.path == setting["url"] for setting in context["nav_settings"]
+    )
     context["html_head"] = "".join(
         collect_signal(html_head, {"sender": request.event, "request": request})
     )
@@ -51,7 +57,7 @@ def orga_events(request):
     if (
         not request.event.is_public
         and request.event.custom_domain
-        and request.user.has_perm("cfp.view_event", request.event)
+        and request.user.has_perm("event.view_event", request.event)
     ):
         child_session_key = f"child_session_{request.event.pk}"
         child_session = request.session.get(child_session_key)
@@ -67,5 +73,7 @@ def orga_events(request):
         else:
             context["new_session"] = child_session
             request.session["event_access"] = True
+
+    context["pagination_sizes"] = [50, 100, 250]
 
     return context

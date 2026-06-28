@@ -1,9 +1,17 @@
+{% comment %}
+SPDX-FileCopyrightText: 2020-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
+
+{% load event_tags %}
 {% load i18n %}
 {% load rich_text %}
 
-<div class="pretalx-session{% if request.user in session.submission.speakers.all %} session-highlight{% endif %}{% if session.is_active %} active{% endif %}{% if session.submission.state == "accepted" %} accepted{% endif %}{% if not session.submission %} break{% endif %}"
-     id="{{ session.submission.code|default:"break" }}"
-     style="--track-color:{% if not session.submission %}#ccc{% elif request.event.feature_flags.use_tracks and session.submission.track and session.submission.track.color %}{{ session.submission.track.color }}{% else %}{{ request.event.get_primary_color }}{% endif %}">
+<div
+    class="pretalx-session{% if session.is_active %} active{% endif %}{% if session.submission.state == 'accepted' %} accepted{% endif %}{% if not session.submission %} break{% endif %}"
+    id="{{ session.submission.code|default:'break' }}"
+    style="--track-color: {% if not session.submission %}#ccc{% elif request.event|get_feature_flag:'use_tracks' and session.submission.track and session.submission.track.color %}{{ session.submission.track.color }}{% else %}{{ request.event.visible_primary_color }}{% endif %}"
+>
     <div class="pretalx-session-time-box">
         {% if show_date %}<div class="start">{{ session.start|date:DAY_MONTH_DATE_FORMAT }}</div>{% endif %}
         <div class="start">{{ session.start|date:"TIME_FORMAT" }}</div>
@@ -17,15 +25,7 @@
         <div class="title">
             {% if not session.submission %}
                 {{ session.description }}
-            {% elif session.submission.is_deleted %}
-                <span class="pretalx-session-title">[{{ phrases.submission.deleted }}]</span>
             {% else %}
-                {% if session.submission.do_not_record %}
-                    <span class="fa-stack">
-                        <i class="fa fa-video-camera fa-stack-1x"></i>
-                        <i class="fa fa-ban do-not-record fa-stack-2x" aria-hidden="true" title="{{ phrases.agenda.schedule_do_not_record }}"></i>
-                    </span>
-                {% endif %}
                 {{ session.submission.title }}
             {% endif %}
         </div>
@@ -42,6 +42,33 @@
             <div class="room">
                 {% if session.room %}{{ session.room.name|default:"" }}{% endif %}
             </div>
+            {% if session.submission %}
+                {% if session.submission.code in signed_up_codes %}
+                    <i
+                        class="fa fa-calendar-check-o signed-up-icon"
+                        aria-hidden="true"
+                        title="{% translate 'You are signed up for this session.' %}"
+                    ></i>
+                {% elif session.signup_status == "full" %}
+                    <i
+                        class="fa fa-user-times signup-icon signup-full"
+                        aria-hidden="true"
+                        title="{% translate 'This session is currently full.' %}"
+                    ></i>
+                {% elif session.signup_status == "open" %}
+                    <i
+                        class="fa fa-user-plus signup-icon"
+                        aria-hidden="true"
+                        title="{% translate 'Requires signup' %}"
+                    ></i>
+                {% endif %}
+                {% if session.submission.do_not_record %}
+                    <span class="fa-stack do-not-record-stack" title="{{ phrases.agenda.schedule_do_not_record }}">
+                        <i class="fa fa-video-camera fa-stack-1x"></i>
+                        <i class="fa fa-ban do-not-record fa-stack-2x" aria-hidden="true"></i>
+                    </span>
+                {% endif %}
+            {% endif %}
         </div>
     </div>
 </div>

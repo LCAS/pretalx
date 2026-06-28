@@ -1,11 +1,15 @@
-import io
-from collections import defaultdict
-from urllib.parse import urlparse
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: luto
 
-import vobject
+import io
+
 from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.storage import Storage
+from django.db.models import Prefetch
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import redirect
 from django.utils.functional import cached_property
@@ -20,121 +24,113 @@ from pretalx.common.views.mixins import (
     PermissionRequired,
     SocialMediaCardMixin,
 )
-from pretalx.person.models import SpeakerProfile, User
-from pretalx.submission.models import QuestionTarget
+from pretalx.person.domain.queries.profile import speakers_for_event
+from pretalx.person.models import SpeakerProfile
+from pretalx.schedule.domain.ical import get_speaker_ical
+from pretalx.submission.domain.queries.question import public_answers_for_speaker
+from pretalx.submission.domain.queries.submission import (
+    signed_up_submission_codes,
+    talks_for_event,
+)
+from pretalx.submission.models import QuestionVariant
 
 
 class SpeakerList(EventPermissionRequired, Filterable, ListView):
     context_object_name = "speakers"
     template_name = "agenda/speakers.html"
-    permission_required = "agenda.view_schedule"
-    default_filters = ("user__name__icontains",)
+    permission_required = "schedule.list_schedule"
+    default_filters = ("name__icontains", "user__name__icontains")
 
     def get_queryset(self):
+        event = self.request.event
         qs = (
-            SpeakerProfile.objects.filter(
-                user__in=self.request.event.speakers, event=self.request.event
+            speakers_for_event(event)
+            .order_by("name")
+            .prefetch_related(
+                Prefetch(
+                    "submissions",
+                    queryset=talks_for_event(event),
+                    to_attr="visible_talks",
+                )
             )
-            .select_related("user", "event")
-            .order_by("user__name")
         )
-        qs = self.filter_queryset(qs)
-
-        speaker_mapping = defaultdict(list)
-        for talk in self.request.event.talks.all().prefetch_related("speakers"):
-            for speaker in talk.speakers.all():
-                speaker_mapping[speaker.code].append(talk)
-
-        for profile in qs:
-            profile.talks = speaker_mapping[profile.user.code]
-        return qs
+        return self.filter_queryset(qs)
 
 
 class SpeakerView(PermissionRequired, TemplateView):
     template_name = "agenda/speaker.html"
-    permission_required = "agenda.view_speaker"
+    permission_required = "person.view_speakerprofile"
     slug_field = "code"
 
     @context
     @cached_property
-    def profile(self):
-        return (
-            SpeakerProfile.objects.filter(
-                event=self.request.event, user__code__iexact=self.kwargs["code"]
-            )
-            .select_related("user")
-            .first()
-        )
-
-    @context
-    @cached_property
-    def talks(self):
-        if not self.request.event.current_schedule:
-            return []
-        return (
-            self.request.event.current_schedule.talks.filter(
-                submission__speakers__code=self.kwargs["code"], is_visible=True
-            )
-            .select_related("submission", "room", "submission__event")
-            .prefetch_related("submission__speakers")
-        )
+    def speaker(self):
+        return self.request.event.submitters.filter(
+            code__iexact=self.kwargs["code"]
+        ).first()
 
     def get_permission_object(self):
-        return self.profile
+        return self.speaker
 
-    @context
-    def answers(self):
-        return self.profile.user.answers.filter(
-            question__is_public=True,
-            question__event=self.request.event,
-            question__target=QuestionTarget.SPEAKER,
-        ).select_related("question")
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        answers = public_answers_for_speaker(self.speaker)
+        short_answers = []
+        long_answers = []
+        icon_answers = []
+        for answer in answers:
+            if answer.question.variant in QuestionVariant.short_answers:
+                if answer.question.show_icon:
+                    icon_answers.append(answer)
+                else:
+                    short_answers.append(answer)
+            else:
+                long_answers.append(answer)
+        context["short_answers"] = short_answers
+        context["long_answers"] = long_answers
+        context["icon_answers"] = icon_answers
+        context["show_avatar"] = (
+            self.speaker.avatar_url and self.request.event.cfp.request_avatar
+        )
+        context["show_sidebar"] = (
+            context["show_avatar"] or len(short_answers) or len(icon_answers)
+        )
+        context["signed_up_codes"] = signed_up_submission_codes(
+            self.request.event, self.request.user
+        )
+        return context
 
 
 class SpeakerRedirect(DetailView):
-    model = User
+    model = SpeakerProfile
 
     def dispatch(self, request, **kwargs):
         speaker = self.get_object()
-        profile = speaker.profiles.filter(event=self.request.event).first()
-        if profile and self.request.user.has_perm("agenda.view_speaker", profile):
-            return redirect(profile.urls.public.full())
-        raise Http404()
+        if speaker and self.request.user.has_perm(
+            "person.view_speakerprofile", speaker
+        ):
+            return redirect(speaker.urls.public.full())
+        raise Http404
 
 
 class SpeakerTalksIcalView(PermissionRequired, DetailView):
-    context_object_name = "profile"
-    permission_required = "agenda.view_speaker"
+    permission_required = "person.view_speakerprofile"
     slug_field = "code"
 
     def get_object(self, queryset=None):
-        return SpeakerProfile.objects.filter(
-            event=self.request.event, user__code__iexact=self.kwargs["code"]
+        return self.request.event.submitters.filter(
+            code__iexact=self.kwargs["code"]
         ).first()
 
     def get(self, request, event, *args, **kwargs):
         if not self.request.event.current_schedule:
-            raise Http404()
-        netloc = urlparse(settings.SITE_URL).netloc
+            raise Http404
         speaker = self.get_object()
-        slots = self.request.event.current_schedule.talks.filter(
-            submission__speakers=speaker.user, is_visible=True
-        ).select_related("room", "submission")
-
-        cal = vobject.iCalendar()
-        cal.add("prodid").value = (
-            f"-//pretalx//{netloc}//{request.event.slug}//{speaker.code}"
-        )
-
-        for slot in slots:
-            slot.build_ical(cal)
-
+        cal = get_speaker_ical(request.event, speaker)
         try:
-            speaker_name = Storage().get_valid_name(
-                name=speaker.user.name or speaker.user.code
-            )
+            speaker_name = Storage().get_valid_name(name=speaker.get_display_name())
         except SuspiciousFileOperation:
-            speaker_name = Storage().get_valid_name(name=speaker.user.code)
+            speaker_name = Storage().get_valid_name(name=speaker.code)
         return HttpResponse(
             cal.serialize(),
             content_type="text/calendar",
@@ -146,9 +142,8 @@ class SpeakerTalksIcalView(PermissionRequired, DetailView):
 
 class SpeakerSocialMediaCard(SocialMediaCardMixin, SpeakerView):
     def get_image(self):
-        user = self.profile.user
-        if user.avatar:
-            return user.avatar
+        if self.request.event.cfp.request_avatar:
+            return self.speaker.avatar
 
 
 @cache_page(60 * 60)

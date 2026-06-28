@@ -1,3 +1,6 @@
+.. SPDX-FileCopyrightText: 2018-present Tobias Kunze
+.. SPDX-License-Identifier: CC-BY-SA-4.0
+
 .. highlight:: python
    :linenothreshold: 5
 
@@ -64,7 +67,7 @@ your views::
     from pretalx.common.mixins.views import PermissionRequired
 
     class AdminView(PermissionRequired, View):
-        permission_required = "orga.view_submissions"
+        permission_required = "submission.orga_list_submission"
 
 
 There is also a signal that allows you to add the view to the event sidebar navigation like this::
@@ -80,7 +83,7 @@ There is also a signal that allows you to add the view to the event sidebar navi
     @receiver(nav_event, dispatch_uid="friends_tickets_nav")
     def navbar_info(sender, request, **kwargs):
         url = resolve(request.path_info)
-        if not request.user.has_perm("orga.view_orga_area", request.event):
+        if not request.user.has_perm("event.orga_access_event", request.event):
             return []
         return [{
             "label": _("My plugin view"),
@@ -106,6 +109,69 @@ regular view. It will be automatically ensured that:
 * The ``request.event`` attribute contains the correct ``Event`` object
 * The organiser has enabled the plugin
 * The locale middleware has processed the request
+
+
+API views
+---------
+
+You can also expose `Django REST Framework`_ API endpoints from your plugin.
+Register your URLs with the ``api/events/<event>/p/<pluginname>/`` prefix using
+a DRF `Router <Routers_>`_::
+
+    from rest_framework import routers
+
+    from pretalx.event.models.event import SLUG_REGEX
+
+    from .api import MyViewSet
+
+    router = routers.SimpleRouter()
+    router.register(
+        f"api/events/(?P<event>{SLUG_REGEX})/p/myplugin",
+        MyViewSet,
+        basename="myplugin",
+    )
+    urlpatterns += router.urls
+
+Your view should use ``ApiPermission & PluginPermission`` as its permission
+classes. Set ``plugin_required`` to your plugin's name so that the endpoint is
+only available for events that have your plugin enabled. Access control is
+handled by ``rules_permissions`` on your model::
+
+    from rest_framework import serializers, viewsets
+    from rules.contrib.models import RulesModelBase, RulesModelMixin
+
+    from pretalx.api.permissions import ApiPermission, PluginPermission
+
+
+    class MyModel(RulesModelMixin, models.Model, metaclass=RulesModelBase):
+        class Meta:
+            rules_permissions = {
+                "list": my_list_rule,
+                "create": my_create_rule,
+                "update": my_create_rule,
+            }
+
+
+    class MySerializer(serializers.ModelSerializer):
+        class Meta:
+            model = MyModel
+            fields = ["id", "name"]
+
+
+    class MyViewSet(viewsets.ModelViewSet):
+        serializer_class = MySerializer
+        queryset = MyModel.objects.none()
+        permission_classes = [ApiPermission & PluginPermission]
+        plugin_required = "pretalx_myplugin"
+
+        def get_queryset(self):
+            return MyModel.objects.filter(event=self.request.event)
+
+Token-based API authentication (``Authorization: Token <key>``) works
+automatically — the ``ApiPermission`` class skips the fine-grained endpoint
+permission check for plugin views that don't participate in the core endpoint
+system, while still enforcing event access and object-level permissions via
+Django rules.
 
 
 .. _Django REST Framework: http://www.django-rest-framework.org/

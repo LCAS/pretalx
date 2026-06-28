@@ -1,6 +1,10 @@
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from itertools import groupby
 
 from django.apps import apps
+from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy
 
@@ -8,7 +12,7 @@ from django.utils.translation import pgettext_lazy
 CATEGORY_LABELS = {
     "FEATURE": pgettext_lazy("Type of plugin", "Features"),
     "INTEGRATION": pgettext_lazy("Type of plugin", "Integrations"),
-    "CUSTOMIZATION": pgettext_lazy("Type of plugin", "Customizations"),
+    "CUSTOMIZATION": pgettext_lazy("Type of plugin", "Customisations"),
     "EXPORTER": _("Exporters"),
     "RECORDING": _("Recording integrations"),
     "LANGUAGE": _("Languages"),
@@ -18,26 +22,25 @@ CATEGORY_LABELS = {
 
 def get_all_plugins(event=None):
     """Return the PretalxPluginMeta classes of all plugins found in the
-    installed Django apps, sorted by name. If an event is provided, only
-    plugins available for that event are returned."""
+    installed Django apps, sorted by highlight status and name. If an
+    event is provided, only plugins available for that event are returned.
+
+    Each plugin meta class will have a `highlighted` attribute set based on
+    the HIGHLIGHTED_PLUGINS setting."""
     plugins = []
+    highlighted_plugins = settings.HIGHLIGHTED_PLUGINS
     for app in apps.get_app_configs():
         if getattr(app, "PretalxPluginMeta", None):
             meta = app.PretalxPluginMeta
             meta.module = app.name
             meta.app = app
+            meta.highlighted = meta.module in highlighted_plugins
 
             if event and hasattr(app, "is_available") and not app.is_available(event):
                 continue
 
             plugins.append(meta)
-    return sorted(
-        plugins,
-        key=lambda module: (
-            0 if module.module.startswith("pretalx.") else 1,
-            str(module.name).lower().replace("pretalx ", ""),
-        ),
-    )
+    return sorted(plugins, key=plugin_sort_key)
 
 
 def plugin_group_key(plugin):
@@ -45,7 +48,10 @@ def plugin_group_key(plugin):
 
 
 def plugin_sort_key(plugin):
-    return str(plugin.name).lower().replace("pretalx ", "")
+    return (
+        0 if plugin.highlighted else 1,
+        str(plugin.name).lower().replace("pretalx ", ""),
+    )
 
 
 def get_all_plugins_grouped(event=None, filter_visible=True):

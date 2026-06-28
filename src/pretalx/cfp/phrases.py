@@ -1,13 +1,15 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.utils.translation import gettext_lazy as _
+from django.utils.translation import pgettext_lazy
 
 from pretalx.common.text.phrases import Phrases
 
 
 class CfPPhrases(Phrases, app="cfp"):
-    go_to_cfp = _("Go to CfP")
-
     auth_password_reset = _(
-        "If we know a user by this email address (who has not requested a password reset in the last 24 hours), we will send you an e-mail containing further instructions. If you don’t "
+        "If we know a user by this email address (who has not requested a password reset in the last 24 hours), we will send you an email containing further instructions. If you don’t "
         "see the email within the next minutes, check your spam inbox!"
     )
     auth_reset_fail = _(
@@ -15,10 +17,6 @@ class CfPPhrases(Phrases, app="cfp"):
         "email and that the email is no more than 24 hours old."
     )
     auth_reset_success = _("Awesome! You can now log in using your new password.")
-    token_regenerated = _(
-        "Your API token has been regenerated. The previous token will not be usable "
-        "any longer."
-    )
 
     submission_withdrawn = _("Your proposal has been withdrawn.")
     submission_not_withdrawn = _(
@@ -33,34 +31,32 @@ class CfPPhrases(Phrases, app="cfp"):
     submission_not_confirmed = _(
         "This proposal cannot be confirmed at this time – please contact us if you think this is an error."
     )
-    submission_uneditable = _("This proposal cannot be edited anymore.")
+    submission_uneditable = _(
+        "This proposal cannot be edited at this time. Please contact the organisers if you need to make changes."
+    )
 
-    speaker_email = _("Speaker email")
-    invite_subject = _("{speaker} invites you to join their session!")
-    invite_text = _(
-        """Hi!
+    speaker_email = pgettext_lazy("field: speaker's email address", "Speaker email")
+    invite_subject = _("{inviting_speaker} invites you to join their session!")
+    invite_text = _("""Hi!
 
 I’d like to invite you to be a speaker in the session
 
-  “{title}”
+  “{proposal_title}”
 
-at {event}. Please follow this link to join:
+at {event_name}. Please follow this link to join:
 
   {url}
 
 I’m looking forward to it!
-{speaker}"""
-    )
+{inviting_speaker}""")
     invite_invalid_email = _("Please provide a valid email address.")
-    invite_sent = _("The invitation was sent!")
+    invite_sent = _("The invitation has been sent.")
     invite_accepted = _(
         "You are now part of this proposal! Please fill in your profile below."
     )
 
     submission_email_fail = _(
-        "We are experiencing difficulties when sending mails, but your session was submitted successfully!"
+        "We are experiencing difficulties when sending emails, but your session was submitted successfully!"
     )
 
-    # Translators: This string is used for headings and refers to the custom questions
-    # organisers can create for their CfP.
-    questions = _("Questions")
+    custom_fields = _("Custom fields")

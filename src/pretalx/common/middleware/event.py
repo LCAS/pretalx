@@ -1,37 +1,28 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import zoneinfo
 from contextlib import suppress
-from urllib.parse import quote, urljoin
+from urllib.parse import urljoin
 
+from django.apps import apps
 from django.conf import settings
+from django.db.models import Exists, OuterRef, Subquery
 from django.http import Http404
-from django.shortcuts import get_object_or_404, redirect, reverse
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import resolve
 from django.utils import timezone, translation
 from django.utils.translation.trans_real import (
     get_supported_language_variant,
-    language_code_re,
     parse_accept_lang_header,
 )
 from django_scopes import scope, scopes_disabled
 
+from pretalx.common.views.redirect import get_login_redirect
 from pretalx.event.models import Event, Organiser
-
-
-def get_login_redirect(request):
-    params = request.GET.copy()
-    next_url = params.pop("next", None)
-    next_url = next_url[0] if next_url else request.path
-    params = request.GET.urlencode() if request.GET else ""
-    params = f"?next={quote(next_url)}&{params}"
-    event = getattr(request, "event", None)
-    if event:
-        url = (
-            event.orga_urls.login
-            if request.path.startswith("/orga")
-            else event.urls.login
-        )
-        return redirect(url.full() + params)
-    return redirect(reverse("orga:login") + params)
+from pretalx.person.models import SpeakerProfile
+from pretalx.schedule.models import Schedule
+from pretalx.submission.models import Submission
 
 
 class EventPermissionMiddleware:
@@ -72,18 +63,53 @@ class EventPermissionMiddleware:
         if event_slug:
             with scopes_disabled():
                 try:
-                    request.event = get_object_or_404(
-                        Event.objects.prefetch_related("schedules", "submissions"),
-                        slug__iexact=event_slug,
+                    queryset = Event.objects.prefetch_related(
+                        "submissions", "extra_links", "schedules"
+                    ).select_related("organiser", "cfp")
+                    latest_schedule_subquery = (
+                        Schedule.objects.filter(
+                            event=OuterRef("pk"), published__isnull=False
+                        )
+                        .order_by("-published")
+                        .values("pk")[:1]
                     )
-                except ValueError:
-                    # Happens mostly on malformed or malicious input
-                    raise Http404()
+                    annotations = {
+                        "_current_schedule_pk": Subquery(latest_schedule_subquery)
+                    }
+                    if request.user.is_authenticated:
+                        annotations["request_speaker_name"] = Subquery(
+                            SpeakerProfile.objects.filter(
+                                event=OuterRef("pk"), user=request.user
+                            ).values("name")[:1]
+                        )
+                        if "orga" not in url.namespaces:
+                            annotations["has_cfp_submissions"] = Exists(
+                                Submission.all_objects.filter(
+                                    event=OuterRef("pk"), speakers__user=request.user
+                                )
+                            )
+                    queryset = queryset.annotate(**annotations)
+                    request.event = get_object_or_404(queryset, slug__iexact=event_slug)
+                except ValueError:  # pragma: no cover -- defensive; URL regex prevents most malformed slugs
+                    raise Http404 from None
         event = getattr(request, "event", None)
 
         self._select_locale(request)
+
+        if (
+            event
+            and url.namespaces
+            and url.namespaces[0] == "plugins"
+            and len(url.namespaces) > 1
+        ):
+            plugin = url.namespaces[1]
+            app = apps.get_app_config(plugin)
+            visible = getattr(app.PretalxPluginMeta, "visible", True)
+            if visible and plugin not in event.plugin_list:
+                raise Http404
+
         is_exempt = (
-            url.url_name == "export"
+            url.url_name in ("export", "event.css", "widget.messages")
             if "agenda" in url.namespaces
             else request.path.startswith("/api/")
         )
@@ -123,8 +149,8 @@ class EventPermissionMiddleware:
         )
         language = (
             self._language_from_request(request, supported)
-            or self._language_from_cookie(request, supported)
             or self._language_from_user(request, supported)
+            or self._language_from_cookie(request, supported)
             or self._language_from_browser(request, supported)
             or self._language_from_event(request, supported)
             or settings.LANGUAGE_CODE
@@ -148,12 +174,9 @@ class EventPermissionMiddleware:
             if accept_lang == "*":
                 break
 
-            if not language_code_re.search(accept_lang):
-                continue
-
-            accept_lang = self._validate_language(accept_lang, supported)
-            if accept_lang:
-                return accept_lang
+            validated = self._validate_language(accept_lang, supported)
+            if validated:
+                return validated
 
     def _language_from_cookie(self, request, supported):
         cookie_value = request.COOKIES.get(settings.LANGUAGE_COOKIE_NAME)

@@ -1,15 +1,17 @@
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import logging
 import uuid
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 import django.dispatch
 from django.apps import apps
 from django.conf import settings
 from django.core.cache import cache
 from django.dispatch.dispatcher import NO_RECEIVERS
-
-from pretalx.event.models import Event
 
 app_cache = {}
 logger = logging.getLogger(__name__)
@@ -30,8 +32,6 @@ class EventPluginSignal(django.dispatch.Signal):
 
     def get_live_receivers(self, sender):
         receivers = self._live_receivers(sender)
-        if not receivers:
-            return []
         return receivers[0]
 
     @staticmethod
@@ -49,19 +49,21 @@ class EventPluginSignal(django.dispatch.Signal):
             app = None
             while True:
                 app = app_cache.get(searchpath)
-                if "." not in searchpath or app:  # pragma: no cover
+                if "." not in searchpath or app:
                     break
                 searchpath, _ = searchpath.rsplit(".", 1)
             return app and app.name in sender.plugin_list
         return False
 
-    def send(self, sender: Event, **named) -> list[tuple[Callable, Any]]:
+    def send(self, sender, **named) -> list[tuple[Callable, Any]]:
         """Send signal from sender to all connected receivers that belong to
         plugins enabled for the given Event.
 
         sender is required to be an instance of
         ``pretalx.event.models.Event``.
         """
+        from pretalx.event.models import Event  # noqa: PLC0415 -- leaf
+
         if sender and not isinstance(sender, Event):
             raise ValueError("Sender needs to be an event.")
 
@@ -84,7 +86,7 @@ class EventPluginSignal(django.dispatch.Signal):
             key=lambda response: (response[0].__module__, response[0].__name__),
         )
 
-    def send_robust(self, sender: Event, **named) -> list[tuple[Callable, Any]]:
+    def send_robust(self, sender, **named) -> list[tuple[Callable, Any]]:
         """Send signal from sender to all connected receivers that belong to
         plugins enabled for the given Event. If a receiver raises an Exception,
         it is returned as the response instead of propagating.
@@ -92,6 +94,8 @@ class EventPluginSignal(django.dispatch.Signal):
         sender is required to be an instance of
         ``pretalx.event.models.Event``.
         """
+        from pretalx.event.models import Event  # noqa: PLC0415 -- leaf
+
         if sender and not isinstance(sender, Event):
             raise ValueError("Sender needs to be an event.")
 
@@ -102,14 +106,14 @@ class EventPluginSignal(django.dispatch.Signal):
         ):
             return []
 
-        if not app_cache:  # pragma: no cover
+        if not app_cache:
             _populate_app_cache()
 
         for receiver in self.get_live_receivers(sender):
             if self._is_active(sender, receiver):
                 try:
                     response = receiver(signal=self, sender=sender, **named)
-                except Exception as err:
+                except Exception as err:  # noqa: BLE001 -- signal handlers must not propagate unexpected exceptions
                     responses.append((receiver, err))
                 else:
                     responses.append((receiver, response))
@@ -119,7 +123,7 @@ class EventPluginSignal(django.dispatch.Signal):
         )
 
     def send_chained(
-        self, sender: Event, chain_kwarg_name, **named
+        self, sender, chain_kwarg_name, **named
     ) -> list[tuple[Callable, Any]]:
         """Send signal from sender to all connected receivers. The return value
         of the first receiver will be used as the keyword argument specified by
@@ -129,6 +133,8 @@ class EventPluginSignal(django.dispatch.Signal):
         sender is required to be an instance of
         ``pretalx.event.models.Event``.
         """
+        from pretalx.event.models import Event  # noqa: PLC0415 -- leaf
+
         if sender and not isinstance(sender, Event):
             raise ValueError("Sender needs to be an event.")
 
@@ -136,10 +142,10 @@ class EventPluginSignal(django.dispatch.Signal):
         if (
             not self.receivers
             or self.sender_receivers_cache.get(sender) is NO_RECEIVERS
-        ):  # pragma: no cover
+        ):
             return response
 
-        if not app_cache:  # pragma: no cover
+        if not app_cache:
             _populate_app_cache()
 
         for receiver in self.get_live_receivers(sender):
@@ -174,23 +180,23 @@ def minimum_interval(
             cache.set(key_running, uniqid, timeout=minutes_running_timeout * 60)
             try:
                 retval = func(*args, **kwargs)
-            except Exception as e:
+            except Exception:
                 try:
                     cache.set(key_result, "error", timeout=minutes_after_error * 60)
-                except Exception:
+                except Exception:  # pragma: no cover — cache backend failure
                     logger.exception("Could not store result")
-                raise e
+                raise
             else:
                 try:
                     cache.set(key_result, "success", timeout=minutes_after_success * 60)
-                except Exception:
+                except Exception:  # pragma: no cover — cache backend failure
                     logger.exception("Could not store result")
                 return retval
             finally:
                 try:
                     if cache.get(key_running) == uniqid:
                         cache.delete(key_running)
-                except Exception:
+                except Exception:  # pragma: no cover — cache backend failure
                     logger.exception("Could not release lock")
 
         return wrapper
@@ -237,6 +243,27 @@ Make sure that any user content in the HTML code you return is properly escaped!
 
 As with all event-plugin signals, the ``sender`` keyword argument will contain the event.
 """
+
+auth_html = django.dispatch.Signal()
+"""
+Responses to the ``pretalx.common.signals.auth_html`` signal will be displayed as
+additional content on any sign-up or login page, for example a login link to your
+custom authentication method (see :ref:`plugin-auth`).
+
+As with all event-plugin signals, the ``sender`` keyword argument will contain the event
+if an event-specific login view is used (for the generic ``/orga/`` login page, the
+``sender`` is ``None``).
+
+Additionally, the signal is passed the ``request`` keyword argument, and an optional
+``next_url`` keyword argument. If ``next_url`` is not empty, you should direct the
+user to the given link once they have completed the authentication.
+"""
+
+profile_bottom_html = django.dispatch.Signal()
+"""
+To display additional HTML content on the user profile/settings pages.
+"""
+
 register_locales = django.dispatch.Signal()
 """
 To provide additional languages via plugins, you will have to provide some settings in
@@ -249,4 +276,45 @@ You should always return your locale when no ``sender`` keyword argument is give
 make your locale available to the makemessages command. Otherwise, check that your
 plugin is enabled in the current event context if your locale should be scoped to
 events with your plugin activated.
+"""
+
+register_fonts = EventPluginSignal()
+"""
+This signal is sent out to get all fonts provided by plugins. Receivers should
+return a dictionary mapping font family names to their font data::
+
+    {
+        "Font Name": {
+            "regular": {
+                "truetype": "path/to/font-regular.ttf",
+                "woff2": "path/to/font-regular.woff2",
+            },
+            "bold": {
+                "truetype": "path/to/font-bold.ttf",
+                "woff2": "path/to/font-bold.woff2",
+            },
+            "italic": {
+                "truetype": "path/to/font-italic.ttf",
+                "woff2": "path/to/font-italic.woff2",
+            },
+            "bolditalic": {
+                "truetype": "path/to/font-bolditalic.ttf",
+                "woff2": "path/to/font-bolditalic.woff2",
+            },
+            "sample": "Optional sample text, e.g. for non-Latin charsets",
+        },
+    }
+
+Paths should be relative to the static root (findable via
+``django.contrib.staticfiles.finders.find()``). Each font must provide a
+``regular`` variant with at least a ``woff2`` key for web display. Providing
+``truetype`` as well is recommended, as it is required for PDF card generation.
+Supported format keys are ``woff2``, ``woff``, and ``truetype``.
+
+The ``bold``, ``italic``, ``bolditalic``, and ``sample`` keys are optional.
+Use ``sample`` to show additional preview text for fonts covering non-Latin
+scripts (e.g. Arabic, CJK). The sample is shown below the standard pangram
+in the font picker.
+
+As with all event plugin signals, the ``sender`` keyword argument will contain the event.
 """

@@ -1,9 +1,13 @@
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from pretalx.common.signals import EventPluginSignal
 
 footer_link = EventPluginSignal()
 """
 This signal allows you to add links to the footer of an event page. You are
-expected to return a dictionary containing the keys ``label`` and ``url``.
+expected to return a dictionary containing the keys ``label`` and ``url``, and
+optionally ``cssclass``.
 
 As with all plugin signals, the ``sender`` keyword argument will contain the event.
 Additionally, the signal will be called with the ``request`` it is processing.

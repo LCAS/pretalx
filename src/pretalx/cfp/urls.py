@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.urls import include, path
 from django.views.generic import RedirectView
 
@@ -14,12 +17,18 @@ urlpatterns = [
                 path("auth/", auth.EventAuth.as_view(), name="event.auth"),
                 path("reset", auth.ResetView.as_view(), name="event.reset"),
                 path("login/", auth.LoginView.as_view(), name="event.login"),
+                path("reset/<token>", auth.RecoverView.as_view(), name="event.recover"),
                 path(
-                    "reset/<token>",
-                    auth.RecoverView.as_view(),
-                    name="event.recover",
+                    "invite/<token>",
+                    auth.RecoverView.as_view(is_invite=True),
+                    name="event.new_recover",
                 ),
                 path("cfp", event.EventCfP.as_view(), name="event.start"),
+                path(
+                    "submit/restart-<code>/",
+                    wizard.SubmitRestartView.as_view(),
+                    name="event.cfp.restart",
+                ),
                 path("submit/", wizard.SubmitStartView.as_view(), name="event.submit"),
                 path(
                     "submit/<tmpid>/<step>/",
@@ -42,11 +51,7 @@ urlpatterns = [
                     user.SubmissionsListView.as_view(),
                     name="event.user.submissions",
                 ),
-                path(
-                    "me/mails/",
-                    user.MailListView.as_view(),
-                    name="event.user.mails",
-                ),
+                path("me/mails/", user.MailListView.as_view(), name="event.user.mails"),
                 path(
                     "me/submissions/<code>/",
                     include(
@@ -75,6 +80,11 @@ urlpatterns = [
                                 "invite",
                                 user.SubmissionInviteView.as_view(),
                                 name="event.user.submission.invite",
+                            ),
+                            path(
+                                "retract-invitation",
+                                user.SubmissionInviteRetractView.as_view(),
+                                name="event.user.submission.retract_invitation",
                             ),
                         ]
                     ),

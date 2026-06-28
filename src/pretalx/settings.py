@@ -1,14 +1,18 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import logging
 import os
 import sys
 from contextlib import suppress
+from importlib.metadata import entry_points
 from pathlib import Path
 from urllib.parse import urlparse
 
+from csp import constants as csp_constants
 from django.contrib.messages import constants as messages
 from django.utils.crypto import get_random_string
 from django.utils.translation import gettext_lazy as _
-from pkg_resources import iter_entry_points
 
 from pretalx import __version__
 from pretalx.common.settings.config import build_config
@@ -40,19 +44,11 @@ DATA_DIR = Path(
 LOG_DIR = Path(config.get("filesystem", "logs", fallback=DATA_DIR / "logs"))
 MEDIA_ROOT = Path(config.get("filesystem", "media", fallback=DATA_DIR / "media"))
 STATIC_ROOT = Path(
-    config.get(
-        "filesystem",
-        "static",
-        fallback=BASE_DIR / "static.dist",
-    )
+    config.get("filesystem", "static", fallback=BASE_DIR / "static.dist")
 )
 IS_HTML_EXPORT = False
 HTMLEXPORT_ROOT = Path(
-    config.get(
-        "filesystem",
-        "htmlexport",
-        fallback=DATA_DIR / "htmlexport",
-    )
+    config.get("filesystem", "htmlexport", fallback=DATA_DIR / "htmlexport")
 )
 
 for directory in (BASE_DIR, DATA_DIR, LOG_DIR, MEDIA_ROOT, HTMLEXPORT_ROOT):
@@ -61,6 +57,8 @@ for directory in (BASE_DIR, DATA_DIR, LOG_DIR, MEDIA_ROOT, HTMLEXPORT_ROOT):
 
 ## APP SETTINGS
 DJANGO_APPS = [
+    # Handle staticfiles in development, must go before staticfiles
+    "whitenoise.runserver_nostatic",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -69,12 +67,12 @@ DJANGO_APPS = [
     "django.contrib.humanize",
 ]
 EXTERNAL_APPS = [
-    "compressor",
-    "djangoformsetjs",
     "django_filters",
-    "jquery",
     "rest_framework.authtoken",
     "rules",
+    "csp",
+    "django_tables2",
+    "django_minify_html",
 ]
 LOCAL_APPS = [
     "pretalx.api",
@@ -88,22 +86,21 @@ LOCAL_APPS = [
     "pretalx.cfp",
     "pretalx.orga",
 ]
-FALLBACK_APPS = [
-    "bootstrap4",
-    "django.forms",
-    "rest_framework",
-]
+FALLBACK_APPS = ["django.forms", "rest_framework"]
 INSTALLED_APPS = DJANGO_APPS + EXTERNAL_APPS + LOCAL_APPS + FALLBACK_APPS
 
 PLUGINS = []
-for entry_point in iter_entry_points(group="pretalx.plugin", name=None):
-    PLUGINS.append(entry_point.module_name)
-    INSTALLED_APPS.append(entry_point.module_name)
+for entry_point in entry_points(group="pretalx.plugin"):
+    PLUGINS.append(entry_point.module)
+    INSTALLED_APPS.append(entry_point.module)
 
 CORE_MODULES = LOCAL_APPS + [
     module for module in config.get("site", "core_modules").split(",") if module
 ]
 
+HIGHLIGHTED_PLUGINS = [
+    module for module in config.get("site", "highlighted_plugins").split(",") if module
+]
 
 ## PLUGIN SETTINGS
 PLUGIN_SETTINGS = {}
@@ -114,7 +111,9 @@ for section in config.sections():
 
 ## URL SETTINGS
 SITE_URL = config.get("site", "url", fallback="http://localhost")
-SITE_NETLOC = urlparse(SITE_URL).netloc
+_site_url = urlparse(SITE_URL)
+SITE_NETLOC = _site_url.netloc
+SITE_HOST = (_site_url.hostname or "").lower()
 ALLOWED_HOSTS = [
     "*"
 ]  # We have our own security middleware to allow for custom event URLs
@@ -123,7 +122,7 @@ ROOT_URLCONF = "pretalx.urls"
 STATIC_URL = config.get("site", "static")
 MEDIA_URL = config.get("site", "media")
 FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
-FILE_UPLOAD_DEFAULT_LIMIT = 10 * 1024 * 1024
+FILE_UPLOAD_DEFAULT_LIMIT = int(config.get("files", "upload_limit")) * 1024 * 1024
 IMAGE_DEFAULT_MAX_WIDTH = 1920
 IMAGE_DEFAULT_MAX_HEIGHT = 1080
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
@@ -142,17 +141,25 @@ def merge_csp(*options, config=None):
     return tuple(result)
 
 
-CSP_DEFAULT_SRC = merge_csp("'self'", config=config.get("site", "csp"))
-CSP_SCRIPT_SRC = merge_csp("'self'", config=config.get("site", "csp_script"))
-CSP_STYLE_SRC = merge_csp(
-    "'self'", "'unsafe-inline'", config=config.get("site", "csp_style")
-)
-CSP_IMG_SRC = merge_csp("'self'", "data:", config=config.get("site", "csp_img"))
-CSP_BASE_URI = ("'none'",)
-CSP_FORM_ACTION = merge_csp("'self'", config=config.get("site", "csp_form"))
+CONTENT_SECURITY_POLICY = {
+    "DIRECTIVES": {
+        "default-src": merge_csp("'self'", config=config.get("site", "csp")),
+        "script-src": merge_csp("'self'", config=config.get("site", "csp_script")),
+        "style-src": merge_csp(
+            "'self'", "'unsafe-inline'", config=config.get("site", "csp_style")
+        ),
+        "img-src": merge_csp("'self'", "data:", config=config.get("site", "csp_img")),
+        "base-uri": csp_constants.NONE,
+        "form-action": merge_csp("'self'", config=config.get("site", "csp_form")),
+    }
+}
 
 CSRF_COOKIE_NAME = "pretalx_csrftoken"
 CSRF_TRUSTED_ORIGINS = [SITE_URL]
+CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_HTTPONLY = False
+CSRF_FAILURE_VIEW = "pretalx.common.views.errors.handle_csrf_failure"
+
 SESSION_COOKIE_NAME = "pretalx_session"
 SESSION_COOKIE_HTTPONLY = True
 if config.get("site", "cookie_domain"):
@@ -167,8 +174,7 @@ if config.has_option("site", "secret"):
 else:
     SECRET_FILE = DATA_DIR / ".secret"
     if SECRET_FILE.exists():
-        with SECRET_FILE.open() as f:
-            SECRET_KEY = f.read().strip()
+        SECRET_KEY = SECRET_FILE.read_text()
     else:
         chars = "abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)"
         SECRET_KEY = get_random_string(50, chars)
@@ -179,12 +185,12 @@ else:
             f.write(SECRET_KEY)
 
 ## TASK RUNNER SETTINGS
-HAS_CELERY = bool(config.get("celery", "broker", fallback=None))
-if HAS_CELERY:
+if bool(config.get("celery", "broker")):
     CELERY_BROKER_URL = config.get("celery", "broker")
     CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
     CELERY_RESULT_BACKEND = config.get("celery", "backend")
     CELERY_RESULT_BACKEND_THREAD_SAFE = True
+    CELERY_TASK_ALWAYS_EAGER = False
 else:
     CELERY_TASK_ALWAYS_EAGER = True
 
@@ -234,12 +240,11 @@ LOGGING = {
             "filename": LOG_DIR / "pretalx.log",
             "formatter": "default",
         },
-        "null": {
-            "class": "logging.NullHandler",
-        },
+        "null": {"class": "logging.NullHandler"},
     },
     "loggers": {
         "": {"handlers": ["file", "console"], "level": loglevel, "propagate": True},
+        "rules": {"handlers": ["file", "console"], "level": "INFO", "propagate": True},
         "django.request": {
             "handlers": ["file", "console"],
             "level": "ERROR",  # Otherwise, we log 404s at WARNING/whatever, which sucks
@@ -250,10 +255,7 @@ LOGGING = {
             "level": loglevel,
             "propagate": True,
         },
-        "django.security.DisallowedHost": {
-            "handlers": ["null"],
-            "propagate": False,
-        },
+        "django.security.DisallowedHost": {"handlers": ["null"], "propagate": False},
         "django.db.backends": {
             "handlers": ["file", "console"],
             "level": "INFO",  # Do not output all the queries
@@ -266,7 +268,8 @@ logging.getLogger("MARKDOWN").setLevel(logging.WARNING)
 email_level = config.get("logging", "email_level", fallback="ERROR") or "ERROR"
 emails = config.get("logging", "email", fallback="").split(",")
 DEFAULT_EXCEPTION_REPORTER = "pretalx.common.exceptions.PretalxExceptionReporter"
-MANAGERS = ADMINS = [(email, email) for email in emails if email]
+EMAIL_SUBJECT_PREFIX = "[pretalx] "
+MANAGERS = ADMINS = [email for email in emails if email]
 if ADMINS:
     LOGGING["handlers"]["mail_admins"] = {
         "level": email_level,
@@ -289,42 +292,24 @@ else:
 
 
 ## CACHE SETTINGS
-CACHES = {"default": {"BACKEND": "django.core.cache.backends.dummy.DummyCache"}}
-REAL_CACHE_USED = False
-SESSION_ENGINE = None
-
-HAS_MEMCACHED = bool(os.getenv("PRETALX_MEMCACHE", ""))
-if HAS_MEMCACHED:
-    REAL_CACHE_USED = True
-    CACHES["default"] = {
-        "BACKEND": "django.core.cache.backends.memcached.PyLibMCCache",
-        "LOCATION": os.getenv("PRETALX_MEMCACHE"),
-    }
-
-HAS_REDIS = config.get("redis", "location") != "False"
-if HAS_REDIS:
-    CACHES["redis"] = {
+redis_location = config.get("redis", "location")
+CACHES = {
+    "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": config.get("redis", "location"),
+        "LOCATION": redis_location,
     }
+}
+
+if config.getboolean("redis", "session"):
     CACHES["redis_sessions"] = {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": config.get("redis", "location"),
+        "LOCATION": redis_location,
         "TIMEOUT": 3600 * 24 * 30,
     }
-    if not HAS_MEMCACHED:
-        CACHES["default"] = CACHES["redis"]
-        REAL_CACHE_USED = True
-
-    if config.getboolean("redis", "session"):
-        SESSION_ENGINE = "django.contrib.sessions.backends.cache"
-        SESSION_CACHE_ALIAS = "redis_sessions"
-
-if not SESSION_ENGINE:
-    if REAL_CACHE_USED:
-        SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
-    else:
-        SESSION_ENGINE = "django.contrib.sessions.backends.db"
+    SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+    SESSION_CACHE_ALIAS = "redis_sessions"
+else:
+    SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
 
 MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 MESSAGE_TAGS = {
@@ -343,110 +328,83 @@ FORMAT_MODULE_PATH = ["pretalx.common.formats"]
 
 LANGUAGE_CODE = config.get("locale", "language_code")
 LANGUAGE_COOKIE_NAME = "pretalx_language"
+
+# Load translation percentages from JSON file
+try:
+    import json
+
+    translation_percentages_path = LOCALE_PATHS[0] / "translation_percentages.json"
+    with translation_percentages_path.open() as f:
+        translation_percentages = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    translation_percentages = {}
+
 LANGUAGES_INFORMATION = {
-    "en": {
-        "name": _("English"),
-        "natural_name": "English",
-        "official": True,
-        "percentage": 100,
-    },
+    "en": {"name": _("English"), "natural_name": "English", "official": True},
     "de": {
         "name": _("German"),
         "natural_name": "Deutsch",
         "official": True,
-        "percentage": 100,
         "path": "de_DE",
     },
     "de-formal": {
         "name": _("German (formal)"),
         "natural_name": "Deutsch",
         "official": True,
-        "percentage": 100,
         "public_code": "de",
         "path": "de_Formal",
     },
-    "ar": {
-        "name": _("Arabic"),
-        "natural_name": "اَلْعَرَبِيَّةُ",
-        "official": False,
-        "percentage": 75,
-    },
-    "cs": {
-        "name": _("Czech"),
-        "natural_name": "Čeština",
-        "official": False,
-        "percentage": 100,
-    },
-    "el": {
-        "name": _("Greek"),
-        "natural_name": "Ελληνικά",
-        "official": False,
-        "percentage": 92,
-    },
-    "es": {
-        "name": _("Spanish"),
-        "natural_name": "Español",
-        "official": False,
-        "percentage": 82,
-    },
+    "ar": {"name": _("Arabic"), "natural_name": "اَلْعَرَبِيَّةُ", "official": False},
+    "bg": {"name": _("Bulgarian"), "natural_name": "Български", "official": False},
+    "cs": {"name": _("Czech"), "natural_name": "Čeština", "official": False},
+    "el": {"name": _("Greek"), "natural_name": "Ελληνικά", "official": False},
+    "es": {"name": _("Spanish"), "natural_name": "Español", "official": False},
     "fr": {
         "name": _("French"),
         "natural_name": "Français",
         "official": False,
-        "percentage": 100,
         "path": "fr_FR",
     },
-    "it": {
-        "name": _("Italian"),
-        "natural_name": "Italiano",
-        "official": False,
-        "percentage": 98,
-    },
+    "it": {"name": _("Italian"), "natural_name": "Italiano", "official": False},
     "ja-jp": {
         "name": _("Japanese"),
         "natural_name": "日本語",
         "official": False,
-        "percentage": 72,
         "public_code": "jp",
     },
-    "nl": {
-        "name": _("Dutch"),
-        "natural_name": "Nederlands",
-        "official": False,
-        "percentage": 91,
-    },
+    "ko": {"name": _("Korean"), "natural_name": "한국어", "official": False},
+    "nl": {"name": _("Dutch"), "natural_name": "Nederlands", "official": False},
+    "pl": {"name": _("Polish"), "natural_name": "Polski", "official": False},
     "pt-br": {
-        "name": _("Brasilian Portuguese"),
+        "name": _("Brazilian Portuguese"),
         "natural_name": "Português brasileiro",
         "official": False,
-        "percentage": 91,
         "public_code": "pt",
     },
     "pt-pt": {
         "name": _("Portuguese"),
         "natural_name": "Português",
         "official": False,
-        "percentage": 92,
         "public_code": "pt",
     },
+    "uk": {"name": _("Ukrainian"), "natural_name": "Українська", "official": False},
+    "vi": {"name": _("Vietnamese"), "natural_name": "người Việt", "official": False},
     "zh-hant": {
         "name": _("Traditional Chinese (Taiwan)"),
         "natural_name": "漢語",
         "official": False,
-        "percentage": 68,
         "public_code": "zh",
     },
     "zh-hans": {
         "name": _("Simplified Chinese"),
         "natural_name": "简体中文",
         "official": False,
-        "percentage": 88,
         "public_code": "zh",
     },
 }
-LANGUAGES_RTL = {
-    "ar",
-}
+
+for lang_code, info in LANGUAGES_INFORMATION.items():
+    info["percentage"] = translation_percentages.get(lang_code, 0)
 
 for section in config.sections():
     # Plugins can add languages, which will not be visible
@@ -479,14 +437,24 @@ DEFAULT_EVENT_PRIMARY_COLOR = "#3aa57c"
 ## AUTHENTICATION SETTINGS
 AUTH_USER_MODEL = "person.User"
 LOGIN_URL = "/orga/login"
-AUTHENTICATION_BACKENDS = (
+DEFAULT_AUTHENTICATION_BACKENDS = [
     "rules.permissions.ObjectPermissionBackend",
     "django.contrib.auth.backends.ModelBackend",
-    "pretalx.common.auth.AuthenticationTokenBackend",
-)
+    "pretalx.api.auth.UserTokenAuthentication",
+]
+EXTRA_AUTH_BACKENDS = [
+    backend
+    for backend in config.get(
+        "authentication", "additional_auth_backends", fallback=""
+    ).split(",")
+    if backend
+]
+AUTHENTICATION_BACKENDS = DEFAULT_AUTHENTICATION_BACKENDS + EXTRA_AUTH_BACKENDS
+
 AUTH_PASSWORD_VALIDATORS = [
     {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
+        "OPTIONS": {"user_attributes": {"name", "email"}},
     },
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
@@ -504,17 +472,18 @@ PASSWORD_HASHERS = [
 ## MIDDLEWARE SETTINGS
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",  # Security first
-    "whitenoise.middleware.WhiteNoiseMiddleware",  # Next up: static files
+    "pretalx.common.middleware.PretalxWhiteNoiseMiddleware",  # Next up: static files
     "django.middleware.common.CommonMiddleware",  # Set some sensible defaults, now, before responses are modified
     "pretalx.common.middleware.SessionMiddleware",  # Add session handling
     "django.contrib.auth.middleware.AuthenticationMiddleware",  # Uses sessions
-    "pretalx.common.auth.AuthenticationTokenMiddleware",  # Make auth tokens work
     "csp.middleware.CSPMiddleware",  # Modifies/sets CSP headers
     "pretalx.common.middleware.MultiDomainMiddleware",  # Check which host is used and if it is valid
     "pretalx.common.middleware.EventPermissionMiddleware",  # Sets locales, request.event, available events, etc.
     "pretalx.common.middleware.CsrfViewMiddleware",  # Protect against CSRF attacks before forms/data are processed
+    "pretalx.common.middleware.RejectInvalidInputMiddleware",  # Reject obviously invalid input (e.g. nullbytes), after CSRF
     "django.contrib.messages.middleware.MessageMiddleware",  # Uses sessions
     "django.middleware.clickjacking.XFrameOptionsMiddleware",  # Protects against clickjacking
+    "django_minify_html.middleware.MinifyHtmlMiddleware",
 ]
 
 
@@ -526,18 +495,15 @@ template_loaders = (
 if not DEBUG:
     template_loaders = (("django.template.loaders.cached.Loader", template_loaders),)
 
-FORM_RENDERER = "django.forms.renderers.TemplatesSetting"
+FORM_RENDERER = "pretalx.common.forms.renderers.TabularFormRenderer"
+FORMS_URLFIELD_ASSUME_HTTPS = True
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [
-            DATA_DIR / "templates",
-            BASE_DIR / "templates",
-        ],
+        "DIRS": [DATA_DIR / "templates", BASE_DIR / "templates"],
         "OPTIONS": {
             "context_processors": [
                 "django.contrib.auth.context_processors.auth",
-                "django.template.context_processors.debug",
                 "django.template.context_processors.i18n",
                 "django.template.context_processors.media",
                 "django.template.context_processors.request",
@@ -545,10 +511,10 @@ TEMPLATES = [
                 "django.template.context_processors.tz",
                 "django.contrib.messages.context_processors.messages",
                 "pretalx.agenda.context_processors.is_html_export",
-                "pretalx.common.context_processors.add_events",
+                "pretalx.common.context_processors.url_info",
                 "pretalx.common.context_processors.locale_context",
-                "pretalx.common.context_processors.messages",
-                "pretalx.common.context_processors.system_information",
+                "pretalx.common.context_processors.event_links",
+                "pretalx.common.context_processors.system_warnings",
                 "pretalx.orga.context_processors.orga_events",
             ],
             "loaders": template_loaders,
@@ -559,17 +525,14 @@ TEMPLATES = [
 STATICFILES_FINDERS = (
     "django.contrib.staticfiles.finders.FileSystemFinder",
     "django.contrib.staticfiles.finders.AppDirectoriesFinder",
-    "compressor.finders.CompressorFinder",
 )
 static_path = BASE_DIR / "pretalx" / "static"
 STATICFILES_DIRS = [static_path] if static_path.exists() else []
 
 STORAGES = {
-    "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
-    },
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
     },
 }
 
@@ -577,24 +540,29 @@ VITE_DEV_SERVER_PORT = 8080
 VITE_DEV_SERVER = f"http://localhost:{VITE_DEV_SERVER_PORT}"
 VITE_DEV_MODE = DEBUG
 VITE_IGNORE = False  # Used to ignore `collectstatic`/`rebuild`
+VITE_CSP_UPDATE = {}
+
+if VITE_DEV_MODE:
+    _vite_ws = VITE_DEV_SERVER.replace("http", "ws")
+    VITE_CSP_UPDATE = {
+        "script-src": ["'unsafe-eval'", VITE_DEV_SERVER],
+        "default-src": [VITE_DEV_SERVER, _vite_ws],
+    }
 
 
 ## EXTERNAL APP SETTINGS
 with suppress(ImportError):
-    from rich.traceback import install
-
-    install(show_locals=True)
-
-with suppress(ImportError):
-    import django_extensions  # noqa
+    import django_extensions  # noqa: F401 -- check if installed
 
     INSTALLED_APPS.append("django_extensions")
 
 if DEBUG:
     with suppress(ImportError):
-        from debug_toolbar import settings as toolbar_settings  # noqa
+        from debug_toolbar import (
+            settings as toolbar_settings,  # noqa: F401 -- check if installed
+        )
 
-        INTERNAL_IPS = ["127.0.0.1", "0.0.0.0", "::1"]
+        INTERNAL_IPS = ["127.0.0.1", "0.0.0.0", "::1"]  # noqa: S104  -- debug toolbar, only in DEBUG mode
         INSTALLED_APPS.append("debug_toolbar")
         MIDDLEWARE.append("debug_toolbar.middleware.DebugToolbarMiddleware")
         DEBUG_TOOLBAR_PATCH_SETTINGS = False
@@ -602,47 +570,73 @@ if DEBUG:
             "JQUERY_URL": "",
             "DISABLE_PANELS": toolbar_settings.PANELS_DEFAULTS,
         }
-BOOTSTRAP4 = {
-    "field_renderers": {
-        "default": "bootstrap4.renderers.FieldRenderer",
-        "inline": "bootstrap4.renderers.InlineFieldRenderer",
-        "event": "pretalx.common.forms.renderers.EventFieldRenderer",
-        "event-inline": "pretalx.common.forms.renderers.EventInlineFieldRenderer",
-    }
-}
-COMPRESS_ENABLED = COMPRESS_OFFLINE = not DEBUG
-COMPRESS_PRECOMPILERS = (("text/x-scss", "django_libsass.SassCompiler"),)
-COMPRESS_FILTERS = {
-    "js": ["compressor.filters.jsmin.rJSMinFilter"],
-    "css": (
-        "compressor.filters.css_default.CssAbsoluteFilter",
-        "compressor.filters.cssmin.rCSSMinFilter",
-    ),
-}
+
+DJANGO_TABLES2_TEMPLATE = "common/includes/table.html"
+
+## API SETTINGS
+MAX_PAGINATION_LIMIT = int(config.get("site", "max_pagination_limit"))
+if MAX_PAGINATION_LIMIT == -1:
+    MAX_PAGINATION_LIMIT = None
 
 REST_FRAMEWORK = {
-    "DEFAULT_RENDERER_CLASSES": (
-        "i18nfield.rest_framework.I18nJSONRenderer",
-        "rest_framework.renderers.BrowsableAPIRenderer",
-    ),
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework.authentication.TokenAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
-    ),
+    "DEFAULT_RENDERER_CLASSES": ("i18nfield.rest_framework.I18nJSONRenderer",),
+    "DEFAULT_AUTHENTICATION_CLASSES": ("pretalx.api.auth.UserTokenAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("pretalx.api.permissions.ApiPermission",),
+    "DEFAULT_PARSER_CLASSES": ("rest_framework.parsers.JSONParser",),
     "DEFAULT_FILTER_BACKENDS": (
         "rest_framework.filters.SearchFilter",
+        "rest_framework.filters.OrderingFilter",
         "django_filters.rest_framework.DjangoFilterBackend",
     ),
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
-    "PAGE_SIZE": 25,
+    "DEFAULT_PAGINATION_CLASS": "pretalx.api.pagination.PageNumberPagination",
+    "PAGE_SIZE": 50,
     "SEARCH_PARAM": "q",
     "ORDERING_PARAM": "o",
-    "VERSIONING_PARAM": "v",
     "DATETIME_FORMAT": "iso-8601",
+    "EXCEPTION_HANDLER": "pretalx.api.exceptions.api_exception_handler",
 }
 if DEBUG:
     REST_FRAMEWORK["COMPACT_JSON"] = False
+
+SPECTACULAR_SETTINGS = {
+    "SCHEMA_PATH_PREFIX": "/api/events/{event}/",
+    "SCHEMA_COERCE_PATH_PK_SUFFIX": True,
+    "COMPONENT_SPLIT_PATCH": False,
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SORT_OPERATIONS": True,
+    "AUTHENTICATION_WHITELIST": [],
+    "ENABLE_DJANGO_DEPLOY_CHECK": False,
+    "VERSION": None,
+    "TITLE": "pretalx API",
+    "SERVERS": [{"url": "https://pretalx.com"}],
+    "EXTERNAL_DOCS": {"url": "https://docs.pretalx.org/api/"},
+    "DEFAULT_SCHEMA_CLASS": None,
+    "PATH_CONVERTER_OVERRIDES": {
+        "slug": {"type": "string", "description": "The event’s slug"}
+    },
+    "POSTPROCESSING_HOOKS": [
+        "drf_spectacular.hooks.postprocess_schema_enums",
+        "pretalx.api.documentation.postprocess_schema",
+    ],
+    "ENUM_NAME_OVERRIDES": {
+        "SubmissionStateEnum": "pretalx.submission.enums.SubmissionStates.choices",
+        "AttendeeSignupStateEnum": "pretalx.submission.enums.AttendeeSignupStates.choices",
+    },
+}
+REST_FLEX_FIELDS = {
+    "WILDCARD_VALUES": [],
+    "RECURSIVE_EXPANSION_PERMITTED": False,
+    "MAXIMUM_EXPANSION_DEPTH": 3,
+}
+
+LOAD_SPECTACULAR = False
+if "spectacular" in sys.argv:
+    with suppress(ImportError):
+        import drf_spectacular  # noqa: F401 -- check if installed
+
+        INSTALLED_APPS.append("drf_spectacular")
+        REST_FRAMEWORK["DEFAULT_SCHEMA_CLASS"] = "drf_spectacular.openapi.AutoSchema"
+        LOAD_SPECTACULAR = True
 
 WSGI_APPLICATION = "pretalx.wsgi.application"
 
@@ -657,17 +651,18 @@ if DEBUG:
             .strip()
         )
 
+SILENCED_SYSTEM_CHECKS = [
+    "security.W003",  # CsrfMiddleware modified but in use
+    "security.W004",  # HSTS belongs to the proxy, not Django
+    "security.W008",  # We have our own HTTPS check
+    "security.W010",  # We have our own HTTPS check
+    "security.W018",  # We have our own DEBUG check (to link our docs)
+]
+
 with suppress(ImportError):
-    from .override_settings import *  # noqa
+    from .override_settings import *  # noqa: F403 -- wildcard import for local overrides
 
 if "--no-pretalx-information" in sys.argv:
     sys.argv.remove("--no-pretalx-information")
-else:
-    log_initial(
-        debug=DEBUG,
-        config_files=CONFIG_FILES,
-        db_name=db_name,
-        db_backend=db_backend,
-        log_dir=LOG_DIR,
-        plugins=PLUGINS,
-    )
+elif not os.environ.get("PRETALX_NO_INITIAL_LOG"):
+    log_initial()

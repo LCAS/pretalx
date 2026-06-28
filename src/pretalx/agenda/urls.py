@@ -1,8 +1,10 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.urls import include, path, re_path
 
-from pretalx.common.views import EventSocialMediaCard, get_static
-
-from .views import featured, feed, schedule, speaker, talk, widget
+from pretalx.agenda.views import featured, feed, schedule, speaker, talk, widget
+from pretalx.orga.views import admin
 
 
 def get_schedule_urls(regex_prefix, name_prefix=""):
@@ -11,7 +13,6 @@ def get_schedule_urls(regex_prefix, name_prefix=""):
     This is useful to generate the same export URLs for main and
     versioned schedule URLs.
     """
-
     regex_prefix = regex_prefix.rstrip("/")
 
     return [
@@ -38,11 +39,7 @@ urlpatterns = [
         "<slug:event>/",
         include(
             [
-                path(
-                    "widgets/schedule.js",
-                    widget.widget_script,
-                    name="widget.script",
-                ),
+                path("widgets/schedule.js", widget.widget_script, name="widget.script"),
                 path("static/event.css", widget.event_css, name="event.css"),
                 path(
                     "schedule/changelog/",
@@ -58,7 +55,7 @@ urlpatterns = [
                     name="widget.script.legacy",
                 ),
                 path(
-                    "schedule/widget/messages.js",
+                    "schedule/widget/messages.json",
                     schedule.schedule_messages,
                     name="widget.messages",
                 ),
@@ -89,21 +86,17 @@ urlpatterns = [
                     talk.FeedbackView.as_view(),
                     name="feedback",
                 ),
+                path("talk/<slug>/signup/", talk.SignupView.as_view(), name="signup"),
                 path(
-                    "talk/<slug>.ics",
-                    talk.SingleICalView.as_view(),
-                    name="ical",
+                    "talk/<slug>/signup/cancel/",
+                    talk.SignupCancelView.as_view(),
+                    name="signup-cancel",
                 ),
+                path("talk/<slug>.ics", talk.SingleICalView.as_view(), name="ical"),
                 path(
-                    "talk/review/<slug>",
-                    talk.TalkReviewView.as_view(),
-                    name="review",
+                    "talk/review/<slug>", talk.TalkReviewView.as_view(), name="review"
                 ),
-                path(
-                    "speaker/<code>/",
-                    speaker.SpeakerView.as_view(),
-                    name="speaker",
-                ),
+                path("speaker/<code>/", speaker.SpeakerView.as_view(), name="speaker"),
                 path(
                     "speaker/<code>/og-image",
                     speaker.SpeakerSocialMediaCard.as_view(),
@@ -116,18 +109,11 @@ urlpatterns = [
                 ),
                 path(
                     "og-image",
-                    EventSocialMediaCard.as_view(),
+                    schedule.EventSocialMediaCard.as_view(),
                     name="event-social",
                 ),
             ]
         ),
     ),
-    path(
-        "sw.js",
-        get_static,
-        {
-            "path": "agenda/js/serviceworker.js",
-            "content_type": "application/javascript",
-        },
-    ),
+    path("healthcheck/", admin.healthcheck, name="healthcheck"),
 ]

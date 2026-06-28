@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2020-present Tobias Kunze
+# SPDX-License-Identifier: Apache-2.0
+
 name: Tests
 
 on:
@@ -32,107 +35,58 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', 3.11, 3.12]
+        python-version: [3.13, 3.14]
         database: [sqlite, postgres]
+        # We run tests on all Postgres x Python versions and on one version for sqlite.
         exclude:
           - database: sqlite
-            python-version: '3.10'
-          - database: sqlite
-            python-version: '3.11'
+            python-version: '3.13'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pretalx
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pretalx"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
-      - uses: actions/checkout@v4
-      - uses: harmon758/postgresql-action@v1
-        with:
-          postgresql version: '14'
-          postgresql db: 'pretalx'
-          postgresql user: 'postgres'
-          postgresql password: 'postgres'
-        if: matrix.database == 'postgres'
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: extractions/setup-just@v4
       - name: Set up node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 'latest'
       - name: Install system dependencies
         run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list
+          sudo apt clean
           sudo apt update
-          sudo apt install gettext
+          sudo apt install -y gettext
       - name: Install Python dependencies
-        run: python -m pip install -Ue ".[dev]"
-      - name: Install Postgres dependencies
-        run: python -m pip install -Ue ".[postgres]"
+        run: just install --extra dev && uv pip install Faker
+        if: matrix.database != 'postgres'
+      - name: Install Python dependencies
+        run: just install --extra dev --extra postgres && uv pip install Faker
         if: matrix.database == 'postgres'
       - name: Install frontend dependencies
-        run: npm ci
-        working-directory: ./src/pretalx/frontend/schedule-editor
-      - name: Run checks
-        run: python manage.py check --deploy
-        working-directory: ./src
-      - name: Run checks
-        run: python manage.py compilemessages
-        working-directory: ./src
+        run: just install-npm
+      - name: Compile messages
+        run: just run compilemessages
       - name: Run tests
-        working-directory: ./src
-        run: |
-          # tee will gobble up our exit code without pipefail
-          set -o pipefail
-          python -m pytest \
-            -nauto -p no:sugar \
-            --junitxml=pytest.xml \
-            --reruns 3 \
-            --cov-report=term-missing:skip-covered \
-            tests | tee pytest-coverage.txt
+        run: just test-coverage -n auto -p no:sugar
         env:
-          PRETALX_CONFIG_FILE: 'tests/ci_${{ matrix.database }}.cfg'
-      - name: Coverage comment
-        id: coverageComment
-        uses: MishaKav/pytest-coverage-comment@main
-        with:
-          pytest-coverage-path: ./src/pytest-coverage.txt
-          junitxml-path: ./src/pytest.xml
-          junitxml-title: Test summary
-          report-only-changed-files: true
-          title: Full coverage report
-        if: always() && matrix.database == 'postgres' && matrix.python-version == '3.12' && github.event_name == 'pull_request'
-      - name: Coverage data (non-PR, do not comment)
-        id: coverageData
-        uses: MishaKav/pytest-coverage-comment@main
-        with:
-          pytest-coverage-path: ./src/pytest-coverage.txt
-          junitxml-path: ./src/pytest.xml
-          junitxml-title: Test summary
-          report-only-changed-files: true
-          hide-comment: true
-          title: Full coverage report
-        if: always() && matrix.database == 'postgres' && matrix.python-version == '3.12' && github.event_name != 'pull_request'
-      - name: Show coverage as build info
-        working-directory: ./src
-        shell: bash  # needed to make echo work as expected
-        run: |
-          python -m coverage json
-
-          export TOTAL_COV=$(python -c "import json;print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
-          echo "TOTAL_COV=$TOTAL_COV" >> $GITHUB_ENV
-          echo "## Test coverage: $TOTAL_COV%" >> $GITHUB_STEP_SUMMARY
-          echo ${{ steps.coverageData.outputs.summaryReport }} >> $GITHUB_STEP_SUMMARY
-          echo ${{ steps.coverageComment.outputs.summaryReport }} >> $GITHUB_STEP_SUMMARY
-          python -m coverage report --skip-covered --skip-empty --show-missing --format=markdown >> $GITHUB_STEP_SUMMARY
-
-          python -m coverage report
-        if: always() && matrix.database == 'postgres' && matrix.python-version == '3.12'
-
-      - name: "Make badge"
-        uses: schneegans/dynamic-badges-action@v1.7.0
-        with:
-          # GIST_TOKEN is a GitHub personal access token with scope "gist".
-          auth: ${{ secrets.GIST_TOKEN }}
-          gistID: 0ac3e4314d780e809c0164c8c329f36f
-          filename: covbadge.json
-          label: coverage
-          message: ${{ env.TOTAL_COV }}%
-          color: "#3aa57c"
-        if: env.TOTAL_COV && github.ref == 'refs/heads/main'
+          PRETALX_CONFIG_FILE: 'src/tests/ci_${{ matrix.database }}.cfg'

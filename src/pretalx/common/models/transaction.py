@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2024-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import contextlib
 
 from django.db import transaction
@@ -22,8 +25,8 @@ def rolledback_transaction():
     try:
         with transaction.atomic():
             yield
-            raise DummyRollbackError()
+            raise DummyRollbackError  # noqa: TRY301  -- intentional rollback mechanism
     except DummyRollbackError:
         pass
-    else:  # pragma: no cover
-        raise Exception("Invalid state, should have rolled back.")
+    else:  # pragma: no cover -- unreachable safeguard; DummyRollbackError is always raised and caught
+        raise RuntimeError("Invalid state, should have rolled back.")

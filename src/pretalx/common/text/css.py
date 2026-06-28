@@ -1,7 +1,9 @@
-import re
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
 
-from cssutils import CSSParser
-from cssutils.css import CSSMediaRule
+import re
+import xml.dom
+
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
@@ -17,6 +19,8 @@ acceptable_css_keywords = {
     "brown",
     "center",
     "collapse",
+    "contain",
+    "cover",
     "dashed",
     "dotted",
     "fuchsia",
@@ -79,6 +83,7 @@ acceptable_css_properties = {
     "line-height",
     "max-width",
     "min-width",
+    "object-fit",
     "overflow",
     "pause",
     "pause-after",
@@ -126,20 +131,24 @@ def validate_key(*, key, style):
 
 
 def validate_rules(rules):
+    from cssutils.css import CSSMediaRule  # noqa: PLC0415 -- slow import
+
     for rule in rules:
         if isinstance(rule, CSSMediaRule):
             validate_rules(rule.cssRules)
         else:
             style = rule.style
-            for key in style.keys():
+            for key in style.keys():  # noqa: SIM118 -- .keys() required; cssutils CSSStyleDeclaration doesn't support direct iteration
                 validate_key(key=key, style=style)
 
 
 def validate_css(css):
+    from cssutils import CSSParser  # noqa: PLC0415 -- slow import
+
     try:
         parser = CSSParser(raiseExceptions=True, parseComments=False)
         stylesheet = parser.parseString(css)
-    except Exception as exception:
-        raise ValidationError(str(exception).split("\n")[0])
+    except xml.dom.DOMException as exception:
+        raise ValidationError(str(exception).split("\n")[0]) from None
     validate_rules(stylesheet.cssRules)
     return css

@@ -1,4 +1,7 @@
-.. _plugin-inde:
+.. SPDX-FileCopyrightText: 2018-present Tobias Kunze
+.. SPDX-License-Identifier: CC-BY-SA-4.0
+
+.. _plugin-index:
 
 Plugin development
 ==================
@@ -15,10 +18,10 @@ a plugin, please add it to our `plugin list`_!
    :maxdepth: 2
 
    plugins
-   general
    customview
    recording
    exporter
+   authentication
 
 .. _plugin idea collection: https://github.com/pretalx/pretalx/wiki/Plugin-ideas
 .. _plugin list: https://github.com/pretalx/pretalx/wiki/Plugins

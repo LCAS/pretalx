@@ -1,16 +1,29 @@
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy
 from i18nfield.fields import I18nCharField, I18nTextField
 
 from pretalx.common.models.mixins import PretalxModel
-from pretalx.common.text.path import path_with_hash
+from pretalx.common.text.path import hashed_path
 from pretalx.common.text.phrases import phrases
 from pretalx.common.urls import EventUrls
+from pretalx.event.rules import can_change_event_settings
+from pretalx.person.rules import can_view_information
+from pretalx.submission.rules import orga_can_change_submissions
 
 
 def resource_path(instance, filename):
-    return f"{instance.event.slug}/speaker_information/{path_with_hash(filename)}"
+    target_name = "info"
+    if not instance._state.adding:
+        target_name = f"info_{instance.pk}"
+    return hashed_path(
+        filename,
+        target_name=target_name,
+        upload_dir=f"{instance.event.slug}/speaker_information/",
+    )
 
 
 class SpeakerInformation(PretalxModel):
@@ -53,6 +66,22 @@ class SpeakerInformation(PretalxModel):
         upload_to=resource_path,
     )
 
+    log_prefix = "pretalx.speaker_information"
+
+    @property
+    def log_parent(self):
+        return self.event
+
     class orga_urls(EventUrls):
         base = edit = "{self.event.orga_urls.information}{self.pk}/"
-        delete = "{base}delete"
+        delete = "{base}delete/"
+
+    class Meta:
+        rules_permissions = {
+            "list": orga_can_change_submissions,
+            "view": can_view_information,
+            "orga_view": orga_can_change_submissions,
+            "create": can_change_event_settings,
+            "update": can_change_event_settings,
+            "delete": can_change_event_settings,
+        }

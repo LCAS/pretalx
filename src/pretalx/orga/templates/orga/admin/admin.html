@@ -1,20 +1,25 @@
 {% extends "orga/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2019-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load compress %}
 {% load copyable %}
 {% load i18n %}
 {% load static %}
 
 {% block scripts %}
-    {% compress js %}
-        <script defer src="{% static "common/js/copy.js" %}"></script>
-    {% endcompress %}
+    <script defer src="{% static 'common/js/ui/copy.js' %}"></script>
 {% endblock scripts %}
 
-{% block extra_title %}{% translate "Administrator information" %} :: {% endblock extra_title %}
+{% block stylesheets %}
+    <link rel="stylesheet" href="{% static 'common/css/ui/tooltip.css' %}">
+{% endblock stylesheets %}
+
+{% block extra_title %}{% translate "Administrator information" %} ::
+{% endblock extra_title %}
 
 {% block content %}
-
     <h1>{% translate "Administrator information" %}</h1>
 
     {% if settings.DEBUG %}
@@ -22,15 +27,15 @@
             <span></span><span>
                 {% blocktranslate trimmed %}
                     You are running pretalx in development mode. Please <strong>STOP</strong>
-                    and set the DEBUG variable to False if this page is in any way reachable
-                    from the internet.
+                    and set the DEBUG variable to False if this page is in any way reachable from the internet.
                 {% endblocktranslate %}
             </span>
         </div>
     {% endif %}
 
     <p>
-        {% translate "Your pretalx version is:" %} <strong>{{ pretalx_version|copyable }}</strong>.
+        {% translate "Your pretalx version is:" %}
+        <strong>{{ pretalx_version|copyable }}</strong>.
         {% blocktranslate trimmed with url="/orga/admin/update/" %}
             You can check for updates <a href="{{ url }}">here</a>.
         {% endblocktranslate %}
@@ -75,7 +80,7 @@
             </ul>
         </li>
         <li>
-            {% translate "Mails" %}
+            {% translate "Emails" %}
             <ul>
                 <li>
                     {% translate "Host" %}: <code>{{ settings.EMAIL_HOST|copyable }}</code>
@@ -92,6 +97,24 @@
                         {% translate "An email password has been set." %}
                     {% else %}
                         {% translate "No email password has been set." %}
+                    {% endif %}
+                </li>
+                <li>
+                    {% if settings.ADMINS %}
+                        <form action="{% url 'orga:admin.test_mail' %}" method="post" class="d-inline">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-info btn-sm">
+                                {% translate "Send test email" %}
+                            </button>
+                        </form>
+                        <small class="text-muted ms-2">
+                            {% translate "Sends a test email to the configured administrator email addresses." %}
+                            (<code>{{ settings.ADMINS|join:", "|copyable }}</code>)
+                        </small>
+                    {% else %}
+                        <small class="text-muted">
+                            {% translate "No administrator email addresses have been configured." %}
+                        </small>
                     {% endif %}
                 </li>
             </ul>
@@ -116,7 +139,7 @@
             {% if settings.ADMINS %}
                 {% translate "On errors, emails will be sent to:" %}
                 {% for admin in settings.ADMINS %}
-                    <code>{{ admin.0|copyable }}</code>
+                    <code>{{ admin|copyable }}</code>
                     {% if not forloop.last %},{% endif %}
                 {% endfor %}
             {% else %}
@@ -133,7 +156,7 @@
     {% endif %}
 
     <h3 class="mt-4">Celery</h3>
-    {% if not settings.HAS_CELERY %}
+    {% if settings.CELERY_TASK_ALWAYS_EAGER %}
         {% translate "No celery workers have been configured." %}
     {% else %}
         <ul>
@@ -155,16 +178,48 @@
             <a target="_blank" rel="noopener" href="https://pretalx.com">{% translate "pretalx website" %}</a>
         </li>
         <li>
-            <a target="_blank" rel="noopener" href="https://docs.pretalx.org">{% translate "pretalx documentation" %}</a>
+            <a
+                target="_blank"
+                rel="noopener"
+                href="https://docs.pretalx.org"
+            >{% translate "pretalx documentation" %}</a>
             <ul>
-                <li><a target="_blank" rel="noopener" href="https://docs.pretalx.org/en/latest/administrator/configure.html">{% translate "Configuration reference" %}</a></li>
-                <li><a target="_blank" rel="noopener" href="https://docs.pretalx.org/en/latest/administrator/installation.html">{% translate "Installation guide" %}</a></li>
-                <li><a target="_blank" rel="noopener" href="https://docs.pretalx.org/en/latest/administrator/maintenance.html">{% translate "Upgrade/maintenance guide" %}</a></li>
+                <li>
+                    <a
+                        target="_blank"
+                        rel="noopener"
+                        href="https://docs.pretalx.org/en/latest/administrator/configure.html"
+                    >{% translate "Configuration reference" %}</a>
+                </li>
+                <li>
+                    <a
+                        target="_blank"
+                        rel="noopener"
+                        href="https://docs.pretalx.org/en/latest/administrator/installation.html"
+                    >{% translate "Installation guide" %}</a>
+                </li>
+                <li>
+                    <a
+                        target="_blank"
+                        rel="noopener"
+                        href="https://docs.pretalx.org/en/latest/administrator/maintenance.html"
+                    >{% translate "Upgrade/maintenance guide" %}</a>
+                </li>
             </ul>
         </li>
-        <li><a target="_blank" rel="noopener" href="https://docs.pretalx.org/en/latest/changelog.html">{% translate "Release notes" %}</a></li>
         <li>
-            <a target="_blank" rel="noopener" href="https://pretalx.com/p/news">{% translate "pretalx blog (release announcements, features)" %}</a>
+            <a
+                target="_blank"
+                rel="noopener"
+                href="https://docs.pretalx.org/en/latest/changelog.html"
+            >{% translate "Release notes" %}</a>
+        </li>
+        <li>
+            <a
+                target="_blank"
+                rel="noopener"
+                href="https://pretalx.com/p/news"
+            >{% translate "pretalx blog (release announcements, features)" %}</a>
         </li>
     </ul>
 {% endblock content %}

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import datetime as dt
 
 from django.contrib import messages
@@ -8,9 +11,10 @@ from django.utils.functional import cached_property
 from django.utils.timezone import now
 from django.views.generic import FormView
 
-from pretalx.cfp.forms.auth import RecoverForm, ResetForm
 from pretalx.common.text.phrases import phrases
-from pretalx.common.views import GenericLoginView, GenericResetView
+from pretalx.common.views.generic import GenericLoginView, GenericResetView
+from pretalx.person.domain.user import change_password
+from pretalx.person.interfaces.forms import RecoverForm, ResetForm
 from pretalx.person.models import User
 
 
@@ -21,11 +25,16 @@ class LoginView(GenericLoginView):
     def event(self):
         return getattr(self.request, "event", None)
 
-    @property
+    @cached_property
     def success_url(self):
         if self.event:
             return self.event.orga_urls.base
         return reverse("orga:event.list")
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["hide_register"] = True
+        return kwargs
 
     def get_password_reset_link(self):
         if self.event:
@@ -34,7 +43,8 @@ class LoginView(GenericLoginView):
 
 
 def logout_view(request):
-    logout(request)
+    if request.method == "POST":
+        logout(request)
     return redirect(
         GenericLoginView.get_next_url_or_fallback(request, reverse("orga:login"))
     )
@@ -74,12 +84,14 @@ class RecoverView(FormView):
             return redirect(reverse("orga:auth.reset"))
         return super().dispatch(request, *args, **kwargs)
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.get_user()
+        return kwargs
+
     def form_valid(self, form):
         user = self.get_user()
-        user.set_password(form.cleaned_data["password"])
-        user.pw_reset_token = None
-        user.pw_reset_time = None
-        user.save()
+        change_password(user, form.cleaned_data["password"])
         messages.success(self.request, phrases.cfp.auth_reset_success)
         return super().form_valid(form)
 

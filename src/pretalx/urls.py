@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from contextlib import suppress
 
 from django.apps import apps
@@ -6,7 +9,9 @@ from django.conf.urls.static import static
 from django.urls import include, path
 from django.utils.module_loading import import_string
 
-from pretalx.common.views import error_view
+from pretalx.common.views.errors import error_view
+from pretalx.common.views.redirect import redirect_view
+from pretalx.common.views.shortlink import shortlink_view
 
 plugin_patterns = []
 for app in apps.get_app_configs():
@@ -24,6 +29,8 @@ urlpatterns = [
     path("500", error_view(500)),
     path("orga/", include("pretalx.orga.urls", namespace="orga")),
     path("api/", include("pretalx.api.urls", namespace="api")),
+    path("redirect/", redirect_view, name="redirect"),
+    path("redirect/<code>", shortlink_view, name="shortlink"),
     # Root patterns are ordered by precedence:
     # Plugins last, so that they cannot break anything
     path("", include("pretalx.agenda.urls", namespace="agenda")),
@@ -31,13 +38,14 @@ urlpatterns = [
     path("", include((plugin_patterns, "plugins"))),
 ]
 
-handler500 = "pretalx.common.views.handle_500"
+handler400 = "pretalx.common.views.errors.handle_400"
+handler403 = "pretalx.common.views.errors.handle_403"
+handler404 = "pretalx.common.views.errors.handle_404"
+handler500 = "pretalx.common.views.errors.handle_500"
 
 if settings.DEBUG:
     with suppress(ImportError):
         import debug_toolbar
 
-        urlpatterns += [
-            path("__debug__/", include(debug_toolbar.urls)),
-        ]
-urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+        urlpatterns += [path("__debug__/", include(debug_toolbar.urls))]
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

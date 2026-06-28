@@ -1,3 +1,10 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: luto
+
+import smtplib
 from pathlib import Path
 
 from csp.decorators import csp_update
@@ -8,6 +15,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.storage import FileSystemStorage
 from django.db import transaction
 from django.forms.models import inlineformset_factory
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.decorators import method_decorator
@@ -15,61 +23,96 @@ from django.utils.functional import cached_property
 from django.utils.safestring import mark_safe
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
-from django.utils.translation import ngettext_lazy
-from django.views.generic import FormView, ListView, TemplateView, UpdateView, View
+from django.utils.translation import ngettext_lazy, pgettext, pgettext_lazy
+from django.views.generic import (
+    DetailView,
+    FormView,
+    ListView,
+    TemplateView,
+    UpdateView,
+    View,
+)
 from django_context_decorator import context
 from django_scopes import scope, scopes_disabled
 from formtools.wizard.views import SessionWizardView
-from rest_framework.authtoken.models import Token
 
-from pretalx.common.forms import I18nEventFormSet, I18nFormSet
+from pretalx.common.domain.queries.log import event_activity_log
+from pretalx.common.fonts import get_font_definitions, get_fonts
+from pretalx.common.forms import I18nEventFormSet, save_related_formset
+from pretalx.common.forms.log import LogFilterForm
 from pretalx.common.models import ActivityLog
+from pretalx.common.plugins import get_all_plugins_grouped
+from pretalx.common.templatetags.rich_text import render_markdown
 from pretalx.common.text.phrases import phrases
-from pretalx.common.views import OrderModelView, is_form_bound
+from pretalx.common.ui import Button, delete_link
+from pretalx.common.views.helpers import is_htmx
 from pretalx.common.views.mixins import (
     ActionConfirmMixin,
-    ActionFromUrl,
     EventPermissionRequired,
+    Filterable,
     PermissionRequired,
     SensibleBackWizardMixin,
 )
-from pretalx.event.forms import (
+from pretalx.event.domain.event import (
+    activate_event,
+    copy_event_data,
+    create_event,
+    deactivate_event,
+    post_create_event,
+    shred_event,
+)
+from pretalx.event.domain.plugins import apply_plugin_changes
+from pretalx.event.domain.team import accept_team_invite
+from pretalx.event.interfaces.forms import (
+    EventFooterLinkFormset,
+    EventForm,
+    EventHeaderLinkFormset,
     EventWizardBasicsForm,
-    EventWizardCopyForm,
     EventWizardDisplayForm,
     EventWizardInitialForm,
+    EventWizardPluginForm,
     EventWizardTimelineForm,
 )
-from pretalx.event.models import Event, Team, TeamInvite
-from pretalx.orga.forms import EventForm
-from pretalx.orga.forms.event import (
-    MailSettingsForm,
+from pretalx.event.models import Event, TeamInvite
+from pretalx.mail.domain.smtp import mail_backend_for_event
+from pretalx.mail.interfaces.forms import MailSettingsForm
+from pretalx.person.interfaces.forms import UserForm
+from pretalx.person.models import User
+from pretalx.schedule.interfaces.forms import WidgetGenerationForm, WidgetSettingsForm
+from pretalx.submission.domain.review import (
+    activate_review_phase,
+    validate_review_phases,
+)
+from pretalx.submission.interfaces.forms import (
     ReviewPhaseForm,
     ReviewScoreCategoryForm,
     ReviewSettingsForm,
-    WidgetGenerationForm,
-    WidgetSettingsForm,
 )
-from pretalx.orga.signals import activate_event
-from pretalx.person.forms import LoginInfoForm, OrgaProfileForm, UserForm
-from pretalx.person.models import User
 from pretalx.submission.models import ReviewPhase, ReviewScoreCategory
-from pretalx.submission.tasks import recalculate_all_review_scores
+from pretalx.submission.tasks import task_recalculate_review_scores
 
 
 class EventSettingsPermission(EventPermissionRequired):
-    permission_required = "orga.change_settings"
-    write_permission_required = "orga.change_settings"
+    permission_required = "event.update_event"
+    write_permission_required = "event.update_event"
 
     @property
     def permission_object(self):
         return self.request.event
 
 
-class EventDetail(EventSettingsPermission, ActionFromUrl, UpdateView):
+class FontPreviewCSS(EventSettingsPermission, View):
+    def get(self, request, *args, **kwargs):
+        fonts = get_fonts(request.event)
+        if not fonts:
+            return HttpResponse("", content_type="text/css")
+        css = get_font_definitions(fonts, list(fonts.keys()))
+        return HttpResponse(css, content_type="text/css")
+
+
+class EventDetail(EventSettingsPermission, UpdateView):
     model = Event
     form_class = EventForm
-    permission_required = "orga.change_settings"
     template_name = "orga/settings/form.html"
 
     def get_object(self, queryset=None):
@@ -77,7 +120,9 @@ class EventDetail(EventSettingsPermission, ActionFromUrl, UpdateView):
 
     @cached_property
     def object(self):
-        return self.request.event
+        return Event.objects.prefetch_related("extra_links").get(
+            pk=self.request.event.pk
+        )
 
     def get_form_kwargs(self, *args, **kwargs):
         response = super().get_form_kwargs(*args, **kwargs)
@@ -85,13 +130,30 @@ class EventDetail(EventSettingsPermission, ActionFromUrl, UpdateView):
         return response
 
     @context
-    def url_placeholder(self):
-        return f"https://{self.request.host}/"
+    @cached_property
+    def header_links_formset(self):
+        return EventHeaderLinkFormset(
+            self.request.POST if self.request.method == "POST" else None,
+            event=self.object,
+            prefix="header-links",
+            instance=self.object,
+        )
+
+    @context
+    @cached_property
+    def footer_links_formset(self):
+        return EventFooterLinkFormset(
+            self.request.POST if self.request.method == "POST" else None,
+            event=self.object,
+            prefix="footer-links",
+            instance=self.object,
+        )
 
     @context
     def tablist(self):
         return {
             "general": _("General information"),
+            "features": pgettext_lazy("Event settings tab", "Features"),
             "localisation": _("Localisation"),
             "display": _("Display settings"),
             "texts": _("Texts"),
@@ -100,26 +162,49 @@ class EventDetail(EventSettingsPermission, ActionFromUrl, UpdateView):
     def get_success_url(self) -> str:
         return self.object.orga_urls.settings
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["submit_buttons"] = [Button()]
+        if "heading_font" in self.get_form().fields:
+            context["font_preview_url"] = reverse(
+                "orga:settings.font-preview.css", kwargs={"event": self.object.slug}
+            )
+        if self.request.user.is_administrator:
+            context["submit_buttons_extra"] = [
+                delete_link(
+                    self.request.event.orga_urls.delete, label=_("Delete event")
+                )
+            ]
+        return context
+
     @transaction.atomic
     def form_valid(self, form):
-        result = super().form_valid(form)
+        if (
+            not self.footer_links_formset.is_valid()
+            or not self.header_links_formset.is_valid()
+        ):
+            messages.error(self.request, phrases.base.error_saving_changes)
+            return self.form_invalid(form)
 
+        result = super().form_valid(form)
+        self.footer_links_formset.save()
+        self.header_links_formset.save()
         form.instance.log_action(
             "pretalx.event.update", person=self.request.user, orga=True
         )
-        messages.success(self.request, _("The event settings have been saved."))
+        messages.success(self.request, phrases.base.saved)
+        if form.custom_domain_warning:
+            messages.warning(self.request, form.custom_domain_warning)
         return result
 
 
 class EventLive(EventSettingsPermission, TemplateView):
     template_name = "orga/event/live.html"
-    permission_required = "orga.change_settings"
 
     def get_context_data(self, **kwargs):
         result = super().get_context_data(**kwargs)
         warnings = []
         suggestions = []
-        # TODO: move to signal
         if (
             not self.request.event.cfp.text
             or len(str(self.request.event.cfp.text)) < 50
@@ -140,9 +225,8 @@ class EventLive(EventSettingsPermission, TemplateView):
                     "url": self.request.event.orga_urls.settings,
                 }
             )
-        # TODO: test that mails can be sent
         if (
-            self.request.event.feature_flags["use_tracks"]
+            self.request.event.get_feature_flag("use_tracks")
             and self.request.event.cfp.request_track
             and self.request.event.tracks.count() < 2
         ):
@@ -164,14 +248,26 @@ class EventLive(EventSettingsPermission, TemplateView):
         if not self.request.event.questions.exists():
             suggestions.append(
                 {
-                    "text": _("You have configured no questions yet."),
+                    "text": _("You have configured no custom fields yet."),
                     "url": self.request.event.cfp.urls.new_question,
                 }
             )
         result["warnings"] = warnings
         result["suggestions"] = suggestions
+        button_kwargs = {"name": "action", "icon": None}
+        if self.request.event.is_public:
+            button_kwargs["value"] = "deactivate"
+            button_kwargs["color"] = "danger"
+            button_kwargs["label"] = _("Go offline")
+        else:
+            button_kwargs["value"] = "activate"
+            button_kwargs["label"] = pgettext(
+                "event visibility: make publicly accessible", "Go live"
+            )
+        result["submit_buttons"] = [Button(**button_kwargs)]
         return result
 
+    @transaction.atomic
     def post(self, request, *args, **kwargs):
         event = request.event
         action = request.POST.get("action")
@@ -179,62 +275,64 @@ class EventLive(EventSettingsPermission, TemplateView):
             if event.is_public:
                 messages.success(request, _("This event was already live."))
             else:
-                responses = activate_event.send_robust(event, request=request)
-                exceptions = [
-                    response[1]
-                    for response in responses
-                    if isinstance(response[1], Exception)
-                ]
+                exceptions, extra_messages = activate_event(
+                    event, user=request.user, request=request
+                )
                 if exceptions:
-                    from pretalx.common.templatetags.rich_text import render_markdown
-
                     messages.error(
                         request,
-                        mark_safe("\n".join(render_markdown(e) for e in exceptions)),
+                        mark_safe("\n".join(render_markdown(e) for e in exceptions)),  # noqa: S308  -- render_markdown sanitises
                     )
                 else:
-                    event.is_public = True
-                    event.save()
-                    event.log_action(
-                        "pretalx.event.activate",
-                        person=self.request.user,
-                        orga=True,
-                        data={},
-                    )
                     messages.success(request, _("This event is now public."))
-                    for response in responses:
-                        if isinstance(response[1], str):
-                            messages.success(request, response[1])
-        else:  # action == 'deactivate'
-            if not event.is_public:
-                messages.success(request, _("This event was already hidden."))
-            else:
-                event.is_public = False
-                event.save()
-                event.log_action(
-                    "pretalx.event.deactivate",
-                    person=self.request.user,
-                    orga=True,
-                    data={},
-                )
-                messages.success(request, _("This event is now hidden."))
+                    for message in extra_messages:
+                        messages.success(request, message)
+        elif not event.is_public:
+            messages.success(request, _("This event was already hidden."))
+        else:
+            deactivate_event(event, user=request.user)
+            messages.success(request, _("This event is now hidden."))
         return redirect(event.orga_urls.base)
 
 
-class EventHistory(EventSettingsPermission, ListView):
+class EventHistory(Filterable, EventSettingsPermission, ListView):
     template_name = "orga/event/history.html"
     model = ActivityLog
     context_object_name = "log_entries"
     paginate_by = 200
+    filter_form_class = LogFilterForm
+
+    def get_queryset(self):
+        return self.filter_queryset(event_activity_log(self.request.event))
+
+
+class EventHistoryDetail(EventSettingsPermission, DetailView):
+    template_name = "orga/event/history_detail.html"
+    model = ActivityLog
+    context_object_name = "log"
+    pk_url_kwarg = "pk"
 
     def get_queryset(self):
         return ActivityLog.objects.filter(event=self.request.event)
 
+    @cached_property
+    def is_htmx(self):
+        return is_htmx(self.request)
 
-class EventReviewSettings(EventSettingsPermission, ActionFromUrl, FormView):
+    def get_template_names(self):
+        if self.is_htmx:
+            return ["orga/event/history_detail_content.html"]
+        return [self.template_name]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["is_htmx_request"] = self.is_htmx
+        return context
+
+
+class EventReviewSettings(EventSettingsPermission, FormView):
     form_class = ReviewSettingsForm
     template_name = "orga/settings/review.html"
-    write_permission_required = "orga.change_settings"
 
     def get_success_url(self) -> str:
         return self.request.event.orga_urls.review_settings
@@ -265,10 +363,9 @@ class EventReviewSettings(EventSettingsPermission, ActionFromUrl, FormView):
         if not phases or not scores:
             return self.get(self.request, *self.args, **self.kwargs)
         form.save()
-        if self.scores_formset.has_changed():
-            recalculate_all_review_scores.apply_async(
-                kwargs={"event_id": self.request.event.pk},
-                ignore_result=True,
+        if any(f.affects_review_scores for f in self.scores_formset.initial_forms):
+            task_recalculate_review_scores.apply_async(
+                kwargs={"event_id": self.request.event.pk}, ignore_result=True
             )
         return super().form_valid(form)
 
@@ -279,7 +376,7 @@ class EventReviewSettings(EventSettingsPermission, ActionFromUrl, FormView):
             Event,
             ReviewPhase,
             form=ReviewPhaseForm,
-            formset=I18nFormSet,
+            formset=I18nEventFormSet,
             can_delete=True,
             extra=0,
         )
@@ -297,45 +394,14 @@ class EventReviewSettings(EventSettingsPermission, ActionFromUrl, FormView):
             return False
 
         with transaction.atomic():
-            for form in self.phases_formset.initial_forms:
-                # Deleting is handled elsewhere, so we skip it here
-                if form.has_changed():
-                    form.instance.event = self.request.event
-                    form.save()
-
-            extra_forms = [
-                form
-                for form in self.phases_formset.extra_forms
-                if form.has_changed
-                and not self.phases_formset._should_delete_form(form)
-            ]
-            for form in extra_forms:
-                form.instance.event = self.request.event
-                form.save()
-
-            for form in self.phases_formset.deleted_forms:
-                form.instance.delete()
-
-            # Now that everything is saved, check for overlapping review phases,
-            # and show an error message if any exist. Raise an exception to
-            # get out of the transaction.
-            # We sort manually, as the review phase with start=None needs to be first
-            review_phases = sorted(
-                list(self.request.event.review_phases.all()),
-                key=lambda phase: (bool(phase.start), phase.start),
+            save_related_formset(
+                self.phases_formset, parent=self.request.event, fk_field="event"
             )
-            for phase, next_phase in zip(review_phases, review_phases[1:]):
-                if not phase.end:
-                    raise ValidationError(
-                        _("Only the last review phase may be open-ended.")
-                    )
-                if phase.end > next_phase.start:
-                    raise ValidationError(
-                        _(
-                            "The review phases '{phase1}' and '{phase2}' overlap. "
-                            "Please make sure that review phases do not overlap, then save again."
-                        ).format(phase1=phase.name, phase2=next_phase.name)
-                    )
+
+            # Now that everything is saved, check that the phase windows
+            # line up. Raised inside the transaction so a violation rolls
+            # the in-progress save back.
+            validate_review_phases(self.request.event)
         return True
 
     @context
@@ -361,62 +427,31 @@ class EventReviewSettings(EventSettingsPermission, ActionFromUrl, FormView):
     def save_scores(self):
         if not self.scores_formset.is_valid():
             return False
-        weights_changed = False
-        for form in self.scores_formset.initial_forms:
-            # Deleting is handled elsewhere, so we skip it here
-            if form.has_changed():
-                if "weight" in form.changed_data:
-                    weights_changed = True
-                form.instance.event = self.request.event
-                form.save()
-
-        extra_forms = [
-            form
-            for form in self.scores_formset.extra_forms
-            if form.has_changed and not self.scores_formset._should_delete_form(form)
-        ]
-        for form in extra_forms:
-            form.instance.event = self.request.event
-            form.save()
-
-        for form in self.scores_formset.deleted_forms:
-            if not form.instance.is_independent:
-                weights_changed = True
-            form.instance.scores.all().delete()
-            form.instance.delete()
-
-        if weights_changed:
-            ReviewScoreCategory.recalculate_scores(self.request.event)
+        save_related_formset(
+            self.scores_formset, parent=self.request.event, fk_field="event"
+        )
         return True
 
 
-class ReviewPhaseOrderView(OrderModelView):
-    permission_required = "orga.change_settings"
-    model = ReviewPhase
-
-    def get_success_url(self):
-        return self.request.event.orga_urls.review_settings
-
-
-class PhaseActivate(PermissionRequired, View):
-    permission_required = "orga.change_settings"
-
+class PhaseActivate(EventSettingsPermission, View):
     def get_object(self):
         return get_object_or_404(
             ReviewPhase, event=self.request.event, pk=self.kwargs.get("pk")
         )
 
-    def dispatch(self, request, *args, **kwargs):
-        super().dispatch(request, *args, **kwargs)
+    def post(self, request, *args, **kwargs):
         phase = self.get_object()
-        phase.activate()
+        if phase.is_active:
+            phase.is_active = False
+            phase.save()
+        else:
+            activate_review_phase(phase, person=request.user)
         return redirect(self.request.event.orga_urls.review_settings)
 
 
-class EventMailSettings(EventSettingsPermission, ActionFromUrl, FormView):
+class EventMailSettings(EventSettingsPermission, FormView):
     form_class = MailSettingsForm
     template_name = "orga/settings/mail.html"
-    write_permission_required = "orga.change_settings"
 
     def get_success_url(self) -> str:
         return self.request.event.orga_urls.mail_settings
@@ -427,20 +462,29 @@ class EventMailSettings(EventSettingsPermission, ActionFromUrl, FormView):
         kwargs["locales"] = self.request.event.locales
         return kwargs
 
+    @context
+    def submit_buttons(self):
+        return [
+            Button(
+                name="test", value="1", label=_("Save and test custom SMTP connection")
+            ),
+            Button(color="info", icon=None),
+        ]
+
     def form_valid(self, form):
         form.save()
 
         if self.request.POST.get("test", "0").strip() == "1":
-            backend = self.request.event.get_mail_backend(force_custom=True)
+            backend = mail_backend_for_event(self.request.event, force_custom=True)
             try:
                 backend.test(self.request.event.mail_settings["mail_from"])
-            except Exception as e:
+            except (OSError, smtplib.SMTPException) as e:
                 messages.warning(
                     self.request,
                     _("An error occurred while contacting the SMTP server: %s")
                     % str(e),
                 )
-            else:  # pragma: no cover
+            else:
                 if form.cleaned_data.get("smtp_use_custom"):
                     messages.success(
                         self.request,
@@ -459,7 +503,7 @@ class EventMailSettings(EventSettingsPermission, ActionFromUrl, FormView):
                         ),
                     )
         else:
-            messages.success(self.request, _("Yay! We saved your changes."))
+            messages.success(self.request, phrases.base.saved)
 
         return super().form_valid(form)
 
@@ -473,20 +517,23 @@ class InvitationView(FormView):
     def invitation(self):
         return get_object_or_404(TeamInvite, token__iexact=self.kwargs.get("code"))
 
-    @context
-    def password_reset_link(self):
-        return reverse("orga:auth.reset")
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["request"] = self.request
+        kwargs["password_reset_link"] = reverse("orga:auth.reset")
+        return kwargs
 
     def post(self, *args, **kwargs):
         if not self.request.user.is_anonymous:
-            self.accept_invite(self.request.user)
+            accept_team_invite(self.invitation, user=self.request.user)
+            messages.info(self.request, _("You are now part of the team!"))
             return redirect(reverse("orga:event.list"))
         return super().post(*args, **kwargs)
 
     def form_valid(self, form):
         form.save()
         user = User.objects.filter(pk=form.cleaned_data.get("user_id")).first()
-        if not user:
+        if not user:  # pragma: no cover -- race condition guard: user was just created by form.save()
             messages.error(
                 self.request,
                 _(
@@ -495,101 +542,48 @@ class InvitationView(FormView):
             )
             return redirect(self.request.event.urls.base)
 
-        self.accept_invite(user)
+        accept_team_invite(self.invitation, user=user)
+        messages.info(self.request, _("You are now part of the team!"))
         login(self.request, user, backend="django.contrib.auth.backends.ModelBackend")
         return redirect(reverse("orga:event.list"))
 
-    @transaction.atomic()
-    def accept_invite(self, user):
-        invite = self.invitation
-        invite.team.members.add(user)
-        invite.team.save()
-        invite.team.organiser.log_action(
-            "pretalx.invite.orga.accept", person=user, orga=True
-        )
-        messages.info(self.request, _("You are now part of the team!"))
-        invite.delete()
 
-
-class UserSettings(TemplateView):
-    form_class = LoginInfoForm
-    template_name = "orga/user.html"
-
-    def get_success_url(self) -> str:
-        return reverse("orga:user.view")
-
-    @context
-    @cached_property
-    def login_form(self):
-        return LoginInfoForm(
-            user=self.request.user,
-            data=self.request.POST if is_form_bound(self.request, "login") else None,
-        )
-
-    @context
-    @cached_property
-    def profile_form(self):
-        return OrgaProfileForm(
-            instance=self.request.user,
-            data=self.request.POST if is_form_bound(self.request, "profile") else None,
-        )
-
-    @context
-    def token(self):
-        return Token.objects.filter(
-            user=self.request.user
-        ).first() or Token.objects.create(user=self.request.user)
-
-    def post(self, request, *args, **kwargs):
-        if self.login_form.is_bound and self.login_form.is_valid():
-            self.login_form.save()
-            messages.success(request, phrases.base.saved)
-            request.user.log_action("pretalx.user.password.update")
-        elif self.profile_form.is_bound and self.profile_form.is_valid():
-            self.profile_form.save()
-            messages.success(request, phrases.base.saved)
-            request.user.log_action("pretalx.user.profile.update")
-        elif request.POST.get("form") == "token":
-            request.user.regenerate_token()
-            messages.success(request, phrases.cfp.token_regenerated)
-        else:
-            messages.error(
-                self.request,
-                _("Oh :( We had trouble saving your input. See below for details."),
-            )
-            return self.get(request, *args, **kwargs)
-        return redirect(self.get_success_url())
-
-
-def condition_copy(wizard):
-    return EventWizardCopyForm.copy_from_queryset(wizard.request.user).exists()
+def condition_plugins(wizard):
+    return bool(get_all_plugins_grouped())
 
 
 class EventWizard(PermissionRequired, SensibleBackWizardMixin, SessionWizardView):
-    permission_required = "orga.create_events"
+    permission_required = "event.create_event"
     file_storage = FileSystemStorage(location=Path(settings.MEDIA_ROOT) / "new_event")
     form_list = [
         ("initial", EventWizardInitialForm),
         ("basics", EventWizardBasicsForm),
         ("timeline", EventWizardTimelineForm),
         ("display", EventWizardDisplayForm),
-        ("copy", EventWizardCopyForm),
+        ("plugins", EventWizardPluginForm),
     ]
-    condition_dict = {"copy": condition_copy}
+    condition_dict = {"plugins": condition_plugins}
 
     def get_template_names(self):
-        return [f"orga/event/wizard/{self.steps.current}.html"]
+        return [
+            f"orga/event/wizard/{self.steps.current}.html",
+            "orga/event/wizard/base.html",
+        ]
 
-    @context
-    def has_organiser(self):
-        return (
-            self.request.user.teams.filter(can_create_events=True).exists()
-            or self.request.user.is_administrator
-        )
-
-    @context
-    def url_placeholder(self):
-        return f"https://{self.request.host}/"
+    def get_context_data(self, *args, **kwargs):
+        result = super().get_context_data(*args, **kwargs)
+        result["submit_buttons"] = [Button(label=_("Next step"), icon=None)]
+        if step := result["wizard"]["steps"].prev:
+            result["submit_buttons_extra"] = [
+                Button(
+                    label=_("Previous step"),
+                    color="info",
+                    name="wizard_goto_step",
+                    value=step,
+                    icon=None,
+                )
+            ]
+        return result
 
     @context
     def organiser(self):
@@ -600,7 +594,7 @@ class EventWizard(PermissionRequired, SensibleBackWizardMixin, SessionWizardView
         )
 
     def render(self, form=None, **kwargs):
-        if (
+        if (  # pragma: no cover -- guards against lost session data mid-wizard
             self.steps.current != "initial"
             and self.get_cleaned_data_for_step("initial") is None
         ):
@@ -635,22 +629,26 @@ class EventWizard(PermissionRequired, SensibleBackWizardMixin, SessionWizardView
         if step != "initial":
             fdata = self.get_cleaned_data_for_step("initial")
             kwargs.update(fdata or {})
+        if step in ("display", "plugins"):
+            basics_data = self.get_cleaned_data_for_step("basics")
+            if basics_data and basics_data.get("copy_from_event"):
+                kwargs["copy_from_event"] = basics_data["copy_from_event"]
         return kwargs
 
     @transaction.atomic()
     def done(self, form_list, *args, **kwargs):
         steps = {}
-        for step in ("initial", "basics", "timeline", "display", "copy"):
+        for step in ("initial", "basics", "timeline", "display", "plugins"):
             try:
                 steps[step] = self.get_cleaned_data_for_step(step)
-            except KeyError:
+            except KeyError:  # pragma: no cover -- handles skipped conditional wizard steps (e.g. plugins)
                 steps[step] = {}
 
         with scopes_disabled():
-            event = Event.objects.create(
+            event = create_event(
                 organiser=steps["initial"]["organiser"],
-                locale_array=",".join(steps["initial"]["locales"]),
-                content_locale_array=",".join(steps["initial"]["locales"]),
+                locales=steps["initial"]["locales"],
+                user=self.request.user,
                 name=steps["basics"]["name"],
                 slug=steps["basics"]["slug"],
                 timezone=steps["basics"]["timezone"],
@@ -662,45 +660,24 @@ class EventWizard(PermissionRequired, SensibleBackWizardMixin, SessionWizardView
                 date_to=steps["timeline"]["date_to"],
             )
         with scope(event=event):
-            deadline = steps["timeline"].get("deadline")
-            if deadline:
-                event.cfp.deadline = deadline.replace(tzinfo=event.tz)
-                event.cfp.save()
-            for setting in ("display_header_data",):
-                value = steps["display"].get(setting)
-                if value:
-                    event.settings.set(setting, value)
-
-        has_control_rights = self.request.user.teams.filter(
-            organiser=event.organiser,
-            all_events=True,
-            can_change_event_settings=True,
-            can_change_submissions=True,
-        ).exists()
-        if not has_control_rights:
-            team = Team.objects.create(
-                organiser=event.organiser,
-                name=_(f"Team {event.name}"),
-                can_change_event_settings=True,
-                can_change_submissions=True,
+            post_create_event(
+                event,
+                user=self.request.user,
+                deadline=steps["timeline"].get("deadline"),
+                display_settings={
+                    "header_pattern": steps["display"].get("header_pattern")
+                },
             )
-            team.members.add(self.request.user)
-            team.limit_events.add(event)
 
         logdata = {}
         for form in form_list:
             logdata.update(form.cleaned_data)
         with scope(event=event):
-            event.log_action(
-                "pretalx.event.create",
-                person=self.request.user,
-                data=logdata,
-                orga=True,
-            )
-
-            if steps["copy"] and steps["copy"]["copy_from_event"]:
-                event.copy_data_from(
-                    steps["copy"]["copy_from_event"],
+            copy_from_event = steps["basics"].get("copy_from_event")
+            if copy_from_event:
+                copy_event_data(
+                    event=event,
+                    source=copy_from_event,
                     skip_attributes=[
                         "locale",
                         "locales",
@@ -708,14 +685,21 @@ class EventWizard(PermissionRequired, SensibleBackWizardMixin, SessionWizardView
                         "timezone",
                         "email",
                         "deadline",
+                        "plugins",
                     ],
                 )
+
+            if steps[
+                "plugins"
+            ]:  # pragma: no branch -- always true when plugins step is shown; empty dict only when step is conditionally skipped
+                selected_plugins = steps["plugins"].get("plugins") or []
+                apply_plugin_changes(event, selected_plugins)
 
         return redirect(event.orga_urls.base + "?congratulations")
 
 
 class EventDelete(PermissionRequired, ActionConfirmMixin, TemplateView):
-    permission_required = "person.is_administrator"
+    permission_required = "person.administrator_user"
     model = Event
     action_text = (
         _(
@@ -737,19 +721,18 @@ class EventDelete(PermissionRequired, ActionConfirmMixin, TemplateView):
         return self.get_object().orga_urls.settings
 
     def post(self, request, *args, **kwargs):
-        self.get_object().shred(person=self.request.user)
+        shred_event(self.get_object(), person=self.request.user)
         return redirect(reverse("orga:event.list"))
 
 
-@method_decorator(csp_update(SCRIPT_SRC="'self' 'unsafe-eval'"), name="dispatch")
-class WidgetSettings(EventPermissionRequired, FormView):
+@method_decorator(csp_update({"script-src": "'self' 'unsafe-eval'"}), name="dispatch")
+class WidgetSettings(EventSettingsPermission, FormView):
     form_class = WidgetSettingsForm
-    permission_required = "orga.change_settings"
     template_name = "orga/settings/widget.html"
 
     def form_valid(self, form):
         form.save()
-        messages.success(self.request, _("The widget settings have been saved."))
+        messages.success(self.request, phrases.base.saved)
         return super().form_valid(form)
 
     def get_form_kwargs(self):
@@ -760,6 +743,9 @@ class WidgetSettings(EventPermissionRequired, FormView):
     def get_context_data(self, **kwargs):
         result = super().get_context_data(**kwargs)
         result["extra_form"] = WidgetGenerationForm(instance=self.request.event)
+        result["generate_submit"] = [
+            Button(_id="generate-widget", _type=None, label=_("Generate widget"))
+        ]
         return result
 
     def get_success_url(self) -> str:

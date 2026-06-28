@@ -1,12 +1,15 @@
 {% extends "orga/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2019-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load bootstrap4 %}
 {% load i18n %}
 
-{% block extra_title %}{% translate "Update check results" %} :: {% endblock extra_title %}
+{% block extra_title %}{% translate "Update check results" %} ::
+{% endblock extra_title %}
 
 {% block content %}
-
     <h2>{% translate "Update check results" %}</h2>
 
     {% if not gs.settings.update_check_enabled %}
@@ -68,7 +71,7 @@
                 </thead>
                 <tbody>
                     {% for row in result_table %}
-                        <tr class="table-{% if row.3 %}danger{% elif row.2 == "?" %}warning{% else %}success{% endif %}">
+                        <tr class="table-{% if row.3 %}danger{% elif row.2 == '?' %}warning{% else %}success{% endif %}">
                             <td>{{ row.0 }}</td>
                             <td class="numeric">{{ row.1 }}</td>
                             <td class="numeric">{{ row.2 }}</td>
@@ -81,13 +84,5 @@
 
     <h2>{% translate "Update check settings" %}</h2>
 
-    <form action="" method="post" class="form-horizontal">
-        {% csrf_token %}
-        {% bootstrap_form_errors form %}
-        {% bootstrap_form form layout="event" %}
-
-        {% include "orga/includes/submit_row.html" %}
-
-    </form>
-
+    {% include "orga/includes/base_form.html" %}
 {% endblock content %}

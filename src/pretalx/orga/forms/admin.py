@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2019-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django import forms
 from django.utils.translation import gettext_lazy as _
 from hierarkey.forms import HierarkeyForm
@@ -25,7 +28,7 @@ class UpdateSettingsForm(GlobalSettingsForm):
     )
     update_check_email = forms.EmailField(
         required=False,
-        label=_("E-mail notifications"),
+        label=_("Email notifications"),
         help_text=_(
             "We will notify you at this address if we detect that a new update is available. This "
             "address will not be transmitted to pretalx.com, the emails will be sent by your server "

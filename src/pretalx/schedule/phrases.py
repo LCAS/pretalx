@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2024-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy
 
@@ -30,3 +33,4 @@ class SchedulePhrases(Phrases, app="schedule"):
     timezone_hint = _("All times in %(tz)s")
 
     no_feedback = _("There has been no feedback for this session yet.")
+    speaker_picture_alt = _("The speaker's profile picture")

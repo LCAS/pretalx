@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import configparser
 import os
 import sys
@@ -5,41 +8,23 @@ from pathlib import Path
 
 CONFIG = {
     "filesystem": {
-        "base": {
-            "default": Path(__file__).parent.parent.parent.parent,
-        },
-        "logs": {
-            "default": None,
-            "env": os.getenv("PRETALX_FILESYSTEM_LOGS"),
-        },
-        "media": {
-            "default": None,
-            "env": os.getenv("PRETALX_FILESYSTEM_MEDIA"),
-        },
-        "static": {
-            "default": None,
-            "env": os.getenv("PRETALX_FILESYSTEM_STATIC"),
-        },
+        "base": {"default": Path(__file__).parent.parent.parent.parent},
+        "logs": {"default": None, "env": os.getenv("PRETALX_FILESYSTEM_LOGS")},
+        "media": {"default": None, "env": os.getenv("PRETALX_FILESYSTEM_MEDIA")},
+        "static": {"default": None, "env": os.getenv("PRETALX_FILESYSTEM_STATIC")},
     },
     "site": {
         "debug": {
             "default": "runserver" in sys.argv or "devserver" in sys.argv,
             "env": os.getenv("PRETALX_DEBUG"),
         },
-        "url": {
-            "default": "http://localhost",
-            "env": os.getenv("PRETALX_SITE_URL"),
-        },
-        "https": {
-            "env": os.getenv("PRETALX_HTTPS"),
-        },
-        "cookie_domain": {
+        "url": {"default": "http://localhost", "env": os.getenv("PRETALX_SITE_URL")},
+        "https": {"env": os.getenv("PRETALX_HTTPS")},
+        "cookie_domain": {"default": "", "env": os.getenv("PRETALX_COOKIE_DOMAIN")},
+        "core_modules": {"default": "", "env": os.getenv("PRETALX_CORE_MODULES")},
+        "highlighted_plugins": {
             "default": "",
-            "env": os.getenv("PRETALX_COOKIE_DOMAIN"),
-        },
-        "core_modules": {
-            "default": "",
-            "env": os.getenv("PRETALX_CORE_MODULES"),
+            "env": os.getenv("PRETALX_HIGHLIGHTED_PLUGINS"),
         },
         "media": {"default": "/media/", "env": os.getenv("PRETALX_SITE_MEDIA")},
         "static": {"default": "/static/", "env": os.getenv("PRETALX_SITE_STATIC")},
@@ -48,122 +33,64 @@ CONFIG = {
         "csp_style": {"default": "", "env": os.getenv("PRETALX_SITE_CSP_STYLE")},
         "csp_img": {"default": "", "env": os.getenv("PRETALX_SITE_CSP_IMG")},
         "csp_form": {"default": "", "env": os.getenv("PRETALX_SITE_CSP_FORM")},
+        "max_pagination_limit": {
+            "default": 250,
+            "env": os.getenv("PRETALX_MAX_PAGINATION_LIMIT"),
+        },
     },
     "database": {
-        "backend": {
-            "default": "sqlite3",
-            "env": os.getenv("PRETALX_DB_TYPE"),
-        },
-        "name": {
-            "env": os.getenv("PRETALX_DB_NAME"),
-        },
-        "user": {
-            "default": "",
-            "env": os.getenv("PRETALX_DB_USER"),
-        },
-        "password": {
-            "default": "",
-            "env": os.getenv("PRETALX_DB_PASS"),
-        },
-        "host": {
-            "default": "",
-            "env": os.getenv("PRETALX_DB_HOST"),
-        },
-        "port": {
-            "default": "",
-            "env": os.getenv("PRETALX_DB_PORT"),
-        },
+        "backend": {"default": "sqlite3", "env": os.getenv("PRETALX_DB_TYPE")},
+        "name": {"env": os.getenv("PRETALX_DB_NAME")},
+        "user": {"default": "", "env": os.getenv("PRETALX_DB_USER")},
+        "password": {"default": "", "env": os.getenv("PRETALX_DB_PASS")},
+        "host": {"default": "", "env": os.getenv("PRETALX_DB_HOST")},
+        "port": {"default": "", "env": os.getenv("PRETALX_DB_PORT")},
     },
     "mail": {
-        "from": {
-            "default": "admin@localhost",
-            "env": os.getenv("PRETALX_MAIL_FROM"),
-        },
-        "host": {
-            "default": "localhost",
-            "env": os.getenv("PRETALX_MAIL_HOST"),
-        },
-        "port": {
-            "default": "25",
-            "env": os.getenv("PRETALX_MAIL_PORT"),
-        },
-        "user": {
-            "default": "",
-            "env": os.getenv("PRETALX_MAIL_USER"),
-        },
-        "password": {
-            "default": "",
-            "env": os.getenv("PRETALX_MAIL_PASSWORD"),
-        },
-        "tls": {
-            "default": "False",
-            "env": os.getenv("PRETALX_MAIL_TLS"),
-        },
-        "ssl": {
-            "default": "False",
-            "env": os.getenv("PRETALX_MAIL_SSL"),
-        },
+        "from": {"default": "admin@localhost", "env": os.getenv("PRETALX_MAIL_FROM")},
+        "host": {"default": "localhost", "env": os.getenv("PRETALX_MAIL_HOST")},
+        "port": {"default": "25", "env": os.getenv("PRETALX_MAIL_PORT")},
+        "user": {"default": "", "env": os.getenv("PRETALX_MAIL_USER")},
+        "password": {"default": "", "env": os.getenv("PRETALX_MAIL_PASSWORD")},
+        "tls": {"default": "False", "env": os.getenv("PRETALX_MAIL_TLS")},
+        "ssl": {"default": "False", "env": os.getenv("PRETALX_MAIL_SSL")},
     },
     "redis": {
         "location": {
-            "default": "False",
+            "default": "redis://127.0.0.1:6379/1",
             "env": os.getenv("PRETALX_REDIS"),
         },
-        "session": {
-            "default": "False",
-            "env": os.getenv("PRETALX_REDIS_SESSIONS"),
-        },
+        "session": {"default": "True", "env": os.getenv("PRETALX_REDIS_SESSIONS")},
     },
     "celery": {
-        "broker": {
-            "default": "",
-            "env": os.getenv("PRETALX_CELERY_BROKER"),
-        },
-        "backend": {
-            "default": "",
-            "env": os.getenv("PRETALX_CELERY_BACKEND"),
-        },
+        "broker": {"default": "", "env": os.getenv("PRETALX_CELERY_BROKER")},
+        "backend": {"default": "", "env": os.getenv("PRETALX_CELERY_BACKEND")},
     },
     "logging": {
-        "email": {
-            "default": "",
-            "env": os.getenv("PRETALX_LOGGING_EMAIL"),
-        },
-        "email_level": {
-            "default": "",
-            "env": os.getenv("PRETALX_LOGGING_EMAIL_LEVEL"),
-        },
+        "email": {"default": "", "env": os.getenv("PRETALX_LOGGING_EMAIL")},
+        "email_level": {"default": "", "env": os.getenv("PRETALX_LOGGING_EMAIL_LEVEL")},
     },
     "locale": {
-        "language_code": {
-            "default": "en",
-            "env": os.getenv("PRETALX_LANGUAGE_CODE"),
-        },
-        "time_zone": {
-            "default": "UTC",
-            "env": os.getenv("PRETALX_TIME_ZONE"),
-        },
+        "language_code": {"default": "en", "env": os.getenv("PRETALX_LANGUAGE_CODE")},
+        "time_zone": {"default": "UTC", "env": os.getenv("PRETALX_TIME_ZONE")},
+    },
+    "files": {
+        "upload_limit": {"default": 10, "env": os.getenv("PRETALX_FILE_UPLOAD_LIMIT")}
     },
 }
 
 
 def read_config_files(config):
-    if "PRETALX_CONFIG_FILE" in os.environ:
-        with open(os.environ.get("PRETALX_CONFIG_FILE"), encoding="utf-8") as fp:
-            config_files = config.read_file(fp)
+    if config_file := os.environ.get("PRETALX_CONFIG_FILE"):
+        config_files = [config_file]
+        with Path(config_file).open(encoding="utf-8") as fp:
+            config.read_file(fp)
     else:
         config_files = config.read(
-            [
-                "/etc/pretalx/pretalx.cfg",
-                Path.home() / ".pretalx.cfg",
-                "pretalx.cfg",
-            ],
+            ["/etc/pretalx/pretalx.cfg", Path.home() / ".pretalx.cfg", "pretalx.cfg"],
             encoding="utf-8",
         )
-    return (
-        config,
-        config_files or [],
-    )  # .read() returns None if there are no config files
+    return (config, config_files or [])
 
 
 def reduce_dict(data):

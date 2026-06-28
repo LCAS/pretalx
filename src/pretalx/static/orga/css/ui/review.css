@@ -1,0 +1,19 @@
+/*
+ * SPDX-FileCopyrightText: 2025-present Tobias Kunze
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+td.reviewer {
+  display: flex;
+  flex-direction: row;
+}
+td.review-text,
+th.review-text {
+  min-width: 20em;
+}
+.markdown-mt-0 > p:first-child {
+  margin-top: 0;
+}
+#review-form .submission-state.badge {
+  padding: 0.2em 0.5em;
+}

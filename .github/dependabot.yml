@@ -1,9 +1,13 @@
+# SPDX-FileCopyrightText: 2021-present Tobias Kunze
+# SPDX-License-Identifier: Apache-2.0
+
 version: 2
 updates:
   - package-ecosystem: pip
     directory: "/"
     schedule:
       interval: weekly
+    versioning-strategy: increase-if-necessary
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

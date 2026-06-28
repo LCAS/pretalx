@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2017-present NONE
+# SPDX-License-Identifier: CC0-1.0
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -10,6 +13,7 @@ __pycache__/
 .Python
 build/
 develop-eggs/
+static.dist
 dist/
 !src/pretalx/static/vendored/**/dist
 downloads/
@@ -53,8 +57,10 @@ coverage.xml
 *.log
 local_settings.py
 *.sqlite3
+*.sqlite
 *.db
 _static/
+static.sdist/
 .secret
 
 # Sphinx documentation
@@ -85,9 +91,19 @@ atlassian-ide-plugin.xml
 
 # generic local files
 local/
+local
+data/
 *.xml
 pretalx.cfg
 override_settings.py
+pyrightconfig.json
+src/tests/locale/
+
+# Frontend
+node_modules/
+# shipped in the wheel, never committed
+src/pretalx/static/agenda/js/pretalx-schedule.min.js*
+src/pretalx/frontend/schedule-editor/dist/
 
 # OS X
 .DS_Store
@@ -97,6 +113,7 @@ override_settings.py
 
 # django-perf-rec
 src/tests/**/*.yml
+src/legacy-tests
 
 # Screenshots
 screens/

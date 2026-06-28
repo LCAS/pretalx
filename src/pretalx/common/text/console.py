@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
+import logging
 import os
 import textwrap
 from contextlib import suppress
@@ -5,8 +9,16 @@ from itertools import repeat
 from pathlib import Path
 from sys import executable
 
-BOLD = "\033[1m"
-RESET = "\033[0m"
+from django.conf import settings
+
+from pretalx import __version__
+
+logger = logging.getLogger(__name__)
+
+ESCAPE = "\033"
+BOLD = f"{ESCAPE}[1m"
+RESET = f"{ESCAPE}[0m"
+RED = f"{ESCAPE}[1;31m"
 UD = "│"
 LR = "─"
 SEPARATORS = {
@@ -33,16 +45,22 @@ def get_separator(*args):
 
 def start_box(size):
     try:
-        print("┏" + "━" * size + "┓")
-    except (UnicodeDecodeError, UnicodeEncodeError):  # pragma: no cover
-        print("-" * (size + 2))
+        logger.info("┏%s┓", "━" * size)
+    except (
+        UnicodeDecodeError,
+        UnicodeEncodeError,
+    ):  # pragma: no cover -- broken terminal encoding
+        logger.info("-" * (size + 2))
 
 
 def end_box(size):
     try:
-        print("┗" + "━" * size + "┛")
-    except (UnicodeDecodeError, UnicodeEncodeError):  # pragma: no cover
-        print("-" * (size + 2))
+        logger.info("┗%s┛", "━" * size)
+    except (
+        UnicodeDecodeError,
+        UnicodeEncodeError,
+    ):  # pragma: no cover -- broken terminal encoding
+        logger.info("-" * (size + 2))
 
 
 def print_line(string, box=False, bold=False, color=None, size=None):
@@ -59,35 +77,42 @@ def print_line(string, box=False, bold=False, color=None, size=None):
         string = f"┃ {string} ┃"
         alt_string = f"| {alt_string} |"
     try:
-        print(string)
-    except (UnicodeDecodeError, UnicodeEncodeError):  # pragma: no cover
+        logger.info(string)
+    except (
+        UnicodeDecodeError,
+        UnicodeEncodeError,
+    ):  # pragma: no cover -- broken terminal encoding
         try:
-            print(alt_string)
+            logger.info(alt_string)
         except (UnicodeDecodeError, UnicodeEncodeError):
-            print("unprintable setting")
+            logger.info("unprintable setting")
 
 
-def log_initial(*, debug, config_files, db_name, db_backend, log_dir, plugins):
-    from pretalx import __version__
-
+def log_initial():
     with suppress(Exception):  # geteuid is not available on all OS
         if os.geteuid() == 0:
             print_line("You are running pretalx as root, why?", bold=True)
 
-    # text, bold
+    if not getattr(settings, "CONFIG_FILES", None):
+        # We are running with weird/test settings, skip output
+        return
+
+    db_settings = settings.DATABASES.get("default") or {}
+    db_backend = db_settings.get("ENGINE", "").rsplit(".")[-1]
+    # Lines is a list of (text, bold)
     lines = [
         (f"pretalx v{__version__}", True),
-        (f'Settings:  {", ".join(config_files)}', False),
-        (f"Database:  {db_name} ({db_backend})", False),
-        (f"Logging:   {log_dir}", False),
+        (f"Settings:  {', '.join(settings.CONFIG_FILES)}", False),
+        (f"Database:  {db_settings.get('NAME')} ({db_backend})", False),
+        (f"Logging:   {settings.LOG_DIR}", False),
         (f"Python:    {executable}", False),
         (f"Source:    {Path(__file__).parent.parent.parent}", False),
     ]
-    if plugins:
-        plugin_lines = textwrap.wrap(", ".join(plugins), width=92)
+    if settings.PLUGINS:
+        plugin_lines = textwrap.wrap(", ".join(settings.PLUGINS), width=92)
         lines.append((f"Plugins:   {plugin_lines[0]}", False))
         lines += [(" " * 11 + line, False) for line in plugin_lines[1:]]
-    if debug:
+    if settings.DEBUG:
         lines += [("DEVELOPMENT MODE, DO NOT USE IN PRODUCTION!", True)]
     image = """
 ┏━━━━━━━━━━┓
@@ -97,9 +122,7 @@ def log_initial(*, debug, config_files, db_name, db_backend, log_dir, plugins):
 ┃  └─┘     ┃
 ┗━━━┯━┯━━━━┛
     ╰─╯
-    """.strip().split(
-        "\n"
-    )
+    """.strip().split("\n")
     img_width = len(image[0])
     image[-1] += " " * (img_width - len(image[-1]))
     image += [" " * img_width for _ in repeat(None, (len(lines) - len(image)))]

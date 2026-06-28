@@ -1,3 +1,6 @@
+.. SPDX-FileCopyrightText: 2018-present Tobias Kunze and contributors
+.. SPDX-License-Identifier: CC-BY-SA-4.0
+
 Management commands
 ===================
 
@@ -14,7 +17,8 @@ All commands are run with the ``python -m pretalx`` prefix::
   python -m pretalx <command> [<flags>] [<options>]
 
 You can add the ``--no-pretalx-information`` flag to any of these commands
-to suppress the printing of the pretalx debug startup header.
+to suppress the printing of the pretalx debug startup header, or set
+``PRETALX_NO_INITIAL_LOG=1`` (or any other non-empty).
 
 Database commands
 -----------------
@@ -50,22 +54,34 @@ reasonable size.
 Debug commands
 --------------
 
-``shell_scoped``
-~~~~~~~~~~~~~~~~
+``shell``
+~~~~~~~~~
 
-The ``shell_scoped`` command opens a Python shell with the pretalx
-configuration and environment. You can use it to import pretalx modules and
-execute methods. For a better environment, install ``django_extensions`` and
-``ipython``.
+The ``shell`` command opens a Python shell with the pretalx configuration and
+environment. If you have ``ipython`` installed, an IPython shell will open,
+though you can change to plain Python with ``-i python``.
+pretalx models will be imported automatically.
 
-You’ll have to provide the event you want to interact with to provide proper
-database isolation::
+If you only want to access data within a single event, run the command within
+an event scope to prevent accidentally accessing other event data (a reassuring
+level of protection if you have to use the shell to write to the database!)::
 
-    $ python -m pretalx shell_scoped --event__slug=myevent
+    $ python -m pretalx shell --event myevent
 
-Alternatively, you can specify that you want to be able to access all events::
+If you are absolutely sure that you want to access all events, disable the
+scoping protection::
 
-    $ python -m pretalx shell_scoped --override
+    $ python -m pretalx shell --unsafe-disable-scopes
+
+``sendtestemail``
+~~~~~~~~~~~~~~~~~
+
+The ``sendtestemail`` command sends a test email to one or more addresses to
+verify that your email configuration is working correctly::
+
+    $ python -m pretalx sendtestemail admin@example.com
+
+You can provide multiple addresses to send a test email to each of them.
 
 ``print_settings``
 ~~~~~~~~~~~~~~~~~~
@@ -91,13 +107,17 @@ Core pretalx commands
 
 The ``rebuild`` command regenerates all static files. With the ``--clear``
 flag, it replaces all static files with ones compiled from scratch. Run this
-command after every upgrade.
+command after every upgrade, and make sure to use your production environment
+(production settings and Python environment).
 
-Run this command with ``--npm-install`` to install or update all frontend
-dependencies. This option will automatically be used the first time when
-pretalx detects that you don’t have a ``node_modules`` directory, but it’s your
-responsibility to use it during updates. It’s not the default as running ``npm
-install`` can take a long time.
+This command also compiles translation files from the core project and all
+installed plugins, so if translations are not showing up, re-running the
+``rebuild`` command is a good first debugging step.
+
+Run this command with ``--npm-install`` to force a rebuild of the npm-built
+static files, like the pretalx schedule. You should not need this when you
+install pretalx from a PyPI package, as we include the pre-built assets in
+our wheels.
 
 ``init``
 ~~~~~~~~
@@ -175,7 +195,7 @@ Development commands
 ~~~~~~~~~~~~~~~~
 
 This command regenerates translation files. It should only be used during
-pretalx development.
+pretalx development (:ref:`developer-translations`).
 
 ``makemigrations``
 ~~~~~~~~~~~~~~~~~~

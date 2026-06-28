@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: Raphael Michel
+
 from contextlib import suppress
 from urllib.parse import urljoin, urlparse
 
@@ -25,10 +31,13 @@ def build_absolute_uri(urlname, event=None, args=None, kwargs=None):
     return urljoin(url, reverse(urlname, args=args, kwargs=kwargs))
 
 
+def get_netloc(event, url=None):
+    return urlparse(get_base_url(event, url)).netloc
+
+
 class EventUrls(Urls):
     def get_hostname(self, url):
-        url = get_base_url(self.instance.event, url)
-        return urlparse(url).netloc
+        return get_netloc(self.instance.event, url)
 
     def get_scheme(self, url):
         url = get_base_url(self.instance.event, url)

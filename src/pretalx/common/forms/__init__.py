@@ -1,3 +1,6 @@
-from .forms import I18nEventFormSet, I18nFormSet, SearchForm
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
 
-__all__ = ["I18nFormSet", "SearchForm", "I18nEventFormSet"]
+from .forms import I18nEventFormSet, I18nFormSet, SearchForm, save_related_formset
+
+__all__ = ["I18nEventFormSet", "I18nFormSet", "SearchForm", "save_related_formset"]

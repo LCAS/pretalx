@@ -1,4 +1,8 @@
+# SPDX-FileCopyrightText: 2018-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import datetime as dt
+import json
 
 from i18nfield.strings import LazyI18nString
 from i18nfield.utils import I18nJSONEncoder
@@ -24,3 +28,13 @@ class I18nStrJSONEncoder(I18nJSONEncoder):
         if isinstance(obj, LazyI18nString):
             return str(obj)
         return super().default(obj)
+
+
+def json_roundtrip(data):
+    return json.loads(json.dumps(data, cls=I18nJSONEncoder))
+
+
+def serialize_i18n(value):
+    if hasattr(value, "data"):
+        return value.data
+    return value

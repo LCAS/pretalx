@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2020-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 """This command supersedes the Django-inbuilt makemessages command.
 
 We do this to allow the easy management of translations by way of plugins.
@@ -22,6 +25,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.management.commands.makemessages import Command as Parent
 
+from pretalx._build import FRONTEND_DIR
 from pretalx.common.signals import register_locales
 
 
@@ -33,22 +37,23 @@ def pathreplace(left, right):
 
 class Command(Parent):
     def handle(self, *args, **options):
+        # Exclude src/local/ plugins from message extraction
+        options["ignore_patterns"] = [*options.get("ignore_patterns", []), "local"]
         locales = {}
         for receiver, response in register_locales.send(sender=None):
             module = import_module(receiver.__module__.split(".")[0])
             path = Path(module.__path__[0])
             for locale in response:
                 # if it's a tuple, use the first part
-                if isinstance(locale, tuple):
-                    locale = locale[0]
-                if "-" in locale:
-                    locale_parts = locale.split("-")
-                    locale = (
+                locale_str = locale[0] if isinstance(locale, tuple) else locale
+                if "-" in locale_str:
+                    locale_parts = locale_str.split("-")
+                    locale_str = (
                         locale_parts[0]
                         + "_"
                         + "_".join(part.capitalize() for part in locale_parts[1:])
                     )
-                locales[locale] = path
+                locales[locale_str] = path
 
         if not locales:
             super().handle(*args, **options)
@@ -62,7 +67,7 @@ class Command(Parent):
             moves.append((translation_path, new_dir))
 
             if not translation_file.exists():
-                print(f"{translation_file} does not exist, regenerating.")
+                self.stdout.write(f"{translation_file} does not exist, regenerating.")
                 continue
 
             if new_dir.exists():
@@ -76,19 +81,32 @@ class Command(Parent):
 
         # Create frontend translations
         base_path = locale_path.parent
-        frontend_path = base_path / "frontend/schedule-editor"
         locales = [locale.name for locale in locale_path.iterdir() if locale.is_dir()]
 
         subprocess.run(
-            "npm run i18n:extract", check=True, shell=True, cwd=frontend_path
+            ["npm", "run", "i18n:extract"],  # noqa: S607  -- npm is a dev dependency
+            check=True,
+            cwd=FRONTEND_DIR,
         )
         # We only need one file, as it's empty anyway
         # (and we don't use numbers or other fancy features.)
         subprocess.run(
-            "npm run i18n:convert2gettext", check=True, shell=True, cwd=frontend_path
+            ["npm", "run", "i18n:convert2gettext"],  # noqa: S607  -- npm is a dev dependency
+            check=True,
+            cwd=FRONTEND_DIR,
         )
 
         # Now merge the js file with the django file in each language
         for locale in locales:
-            command = f"msgcat -o locale/{locale}/LC_MESSAGES/django.po --use-first locale/{locale}/LC_MESSAGES/django.po frontend/schedule-editor/locales/en/translation.po"
-            subprocess.run(command, check=True, shell=True, cwd=base_path)
+            subprocess.run(  # noqa: S603  -- dev-only management command with controlled input
+                [  # noqa: S607  -- msgcat is a gettext utility
+                    "msgcat",
+                    "-o",
+                    f"locale/{locale}/LC_MESSAGES/django.po",
+                    "--use-first",
+                    f"locale/{locale}/LC_MESSAGES/django.po",
+                    "frontend/schedule-editor/locales/en/translation.po",
+                ],
+                check=True,
+                cwd=base_path,
+            )

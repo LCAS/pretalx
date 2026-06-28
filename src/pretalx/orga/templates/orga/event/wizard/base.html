@@ -1,31 +1,34 @@
 {% extends "orga/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2018-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load bootstrap4 %}
 {% load i18n %}
 
-{% block extra_title %}{% translate "New event" %} :: {% endblock extra_title %}
+{% block extra_title %}{% translate "New event" %} ::
+{% endblock extra_title %}
 
 {% block content %}
-    <form method="post"><fieldset>
-        <legend>
-            <span>
-                {% translate "New event" %}
-                <small class="text-muted">{% blocktranslate with total=wizard.steps.count current=wizard.steps.step1 trimmed %}
-                    Step {{ current }} of {{ total }}
-                {% endblocktranslate %}</small>
-            </span>
-        </legend>
-        {% block wizard_content %}{% endblock wizard_content %}
-        {% csrf_token %}
-        {{ wizard.management_form }}
-        {% bootstrap_form wizard.form layout="event" %}
-        <div class="submit-group wizard-row">
-            <button type="submit" class="btn btn-success btn-lg float-right flip ml-auto">{% translate "Next step" %}</button>
-            {% if wizard.steps.prev %}
-                <button name="wizard_goto_step" type="submit" value="{{ wizard.steps.prev }}" class="btn btn-lg btn-info">{% translate "Previous step" %}</button>
-            {% else %}
-                <span></span>
-            {% endif %}
-        </div>
-    </fieldset></form>
+    <form method="post" enctype="multipart/form-data">
+        <fieldset>
+            <legend>
+                <span>
+                    {% translate "New event" %}
+                    <small
+                        class="text-muted"
+                    >{% blocktranslate with total=wizard.steps.count current=wizard.steps.step1 trimmed %}
+                            Step {{ current }} of {{ total }}
+                        {% endblocktranslate %}</small>
+                </span>
+            </legend>
+            {% block wizard_content %}{% endblock wizard_content %}
+            {% csrf_token %}
+            {{ wizard.management_form }}
+            {% block wizard_form %}
+                {{ wizard.form }}
+            {% endblock %}
+            {% include "orga/includes/submit_row.html" %}
+        </fieldset>
+    </form>
 {% endblock content %}

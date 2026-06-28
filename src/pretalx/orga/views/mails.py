@@ -1,68 +1,114 @@
-import bleach
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 from django.contrib import messages
+from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
+from django.template.loader import render_to_string
 from django.utils.functional import cached_property
 from django.utils.html import escape
+from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from django.utils.translation import ngettext_lazy
+from django.utils.translation import ngettext_lazy, pgettext_lazy
 from django.views.generic import FormView, ListView, TemplateView, View
 from django_context_decorator import context
 
 from pretalx.common.language import language
-from pretalx.common.mail import TolerantDict
+from pretalx.common.templatetags.rich_text import render_mail_body
+from pretalx.common.text.formatting import MODE_HTML, format_map
 from pretalx.common.text.phrases import phrases
-from pretalx.common.views import CreateOrUpdateView
+from pretalx.common.ui import Button, delete_link, send_button
+from pretalx.common.views.generic import (
+    CreateOrUpdateView,
+    OrgaCRUDView,
+    OrgaTableMixin,
+)
 from pretalx.common.views.mixins import (
     ActionConfirmMixin,
-    ActionFromUrl,
+    AsyncTaskProgressMixin,
     EventPermissionRequired,
     Filterable,
-    PaginationMixin,
     PermissionRequired,
-    Sortable,
 )
-from pretalx.mail.models import MailTemplate, QueuedMail, get_prefixed_subject
-from pretalx.orga.forms.mails import (
-    DraftRemindersForm,
+from pretalx.mail.domain.queries import outbox_mails, sent_mails
+from pretalx.mail.domain.queue import copy_to_draft
+from pretalx.mail.domain.render import (
+    delivery_html,
+    get_prefixed_subject,
+    render_template_to_mail,
+)
+from pretalx.mail.domain.send import (
+    get_send_mail_exceptions,
+    send_draft,
+    send_transient,
+)
+from pretalx.mail.domain.template import mail_template_by_role
+from pretalx.mail.enums import MailTemplateRoles, QueuedMailStates
+from pretalx.mail.interfaces.forms import (
     MailDetailForm,
     MailTemplateForm,
+    QueuedMailFilterForm,
     WriteSessionMailForm,
     WriteTeamsMailForm,
 )
+from pretalx.mail.models import MailTemplate, QueuedMail
+from pretalx.mail.tasks import task_create_mails_for_template, task_send_outbox_mails
+from pretalx.orga.tables.mail import MailTemplateTable, OutboxMailTable, SentMailTable
+from pretalx.submission.models import Submission, SubmissionStates
 
 
-class OutboxList(
-    EventPermissionRequired, Sortable, Filterable, PaginationMixin, ListView
-):
+class OutboxList(EventPermissionRequired, Filterable, OrgaTableMixin, ListView):
     model = QueuedMail
+    table_class = OutboxMailTable
     context_object_name = "mails"
     template_name = "orga/mails/outbox_list.html"
-    default_sort_field = "-pk"
     default_filters = (
         "to__icontains",
         "subject__icontains",
         "to_users__name__icontains",
         "to_users__email__icontains",
     )
-    sortable_fields = ("to", "subject", "pk")
-    paginate_by = 25
-    permission_required = "orga.view_mails"
+    permission_required = "mail.list_queuedmail"
 
     def get_queryset(self):
-        qs = (
-            self.request.event.queued_mails.prefetch_related("to_users")
-            .filter(sent__isnull=True)
-            .order_by("-id")
+        return self.filter_queryset(outbox_mails(self.request.event))
+
+    @context
+    @cached_property
+    def show_tracks(self):
+        return self.request.event.has_active_tracks
+
+    def get_context_data(self, **kwargs):
+        result = super().get_context_data(**kwargs)
+        counts = self.request.event.queued_mails.filter(
+            state=QueuedMailStates.DRAFT
+        ).aggregate(
+            pending_count=Count("pk"),
+            failed_count=Count("pk", filter=Q(error_data__isnull=False)),
         )
-        qs = self.filter_queryset(qs)
-        return self.sort_queryset(qs)
+        result["is_filtered"] = len(result["mails"]) != counts["pending_count"]
+        result["failed_count"] = counts["failed_count"]
+        return result
+
+    def get_filter_form(self):
+        return QueuedMailFilterForm(
+            self.request.GET, event=self.request.event, sent=False
+        )
+
+    def get_table_kwargs(self):
+        kwargs = super().get_table_kwargs()
+        permission = self.request.user.has_perm(
+            "mail.send_queuedmail", self.request.event
+        )
+        kwargs["has_update_permission"] = permission
+        kwargs["has_delete_permission"] = permission
+        return kwargs
 
 
-class SentMail(
-    EventPermissionRequired, Sortable, Filterable, PaginationMixin, ListView
-):
+class SentMail(EventPermissionRequired, Filterable, OrgaTableMixin, ListView):
     model = QueuedMail
+    table_class = SentMailTable
     context_object_name = "mails"
     template_name = "orga/mails/sent_list.html"
     default_filters = (
@@ -71,31 +117,58 @@ class SentMail(
         "to_users__name__icontains",
         "to_users__email__icontains",
     )
-    default_sort_field = "-sent"
-    sortable_fields = ("to", "subject", "sent")
-    paginate_by = 25
-    permission_required = "orga.view_mails"
+    permission_required = "mail.list_queuedmail"
+
+    def get_filter_form(self):
+        return QueuedMailFilterForm(
+            self.request.GET, event=self.request.event, sent=True
+        )
 
     def get_queryset(self):
-        qs = (
-            self.request.event.queued_mails.prefetch_related("to_users")
-            .filter(sent__isnull=False)
-            .order_by("-sent")
+        return self.filter_queryset(sent_mails(self.request.event))
+
+    @context
+    @cached_property
+    def show_tracks(self):
+        return self.request.event.has_active_tracks
+
+    def get_context_data(self, **kwargs):
+        result = super().get_context_data(**kwargs)
+        sending_pks = list(
+            self.request.event.queued_mails.filter(
+                state=QueuedMailStates.SENDING
+            ).values_list("pk", flat=True)
         )
-        qs = self.filter_queryset(qs)
-        return self.sort_queryset(qs)
+        result["sending_ids"] = ",".join(str(pk) for pk in sending_pks)
+        return result
 
 
-class OutboxSend(EventPermissionRequired, ActionConfirmMixin, TemplateView):
-    permission_required = "orga.send_mails"
+class OutboxSend(AsyncTaskProgressMixin, ActionConfirmMixin, OutboxList):
+    permission_required = "mail.send_queuedmail"
     action_object_name = ""
     action_confirm_label = phrases.base.send
     action_confirm_color = "success"
     action_confirm_icon = "envelope"
 
+    def get_task_progress_template(self):
+        return "orga/mails/sending_progress.html"
+
+    def get_task_progress_title(self):
+        return _("Sending emails")
+
+    def get_task_success_url(self, result):
+        return self.request.event.orga_urls.sent_mails
+
+    def get_task_error_url(self):
+        return self.request.event.orga_urls.outbox
+
+    def get_task_success_message(self, result):
+        count = result.get("count", 0) if result else 0
+        return _("{count} emails have been processed.").format(count=count)
+
     @context
     def question(self):
-        return _("Do you really want to send {count} mails?").format(
+        return _("Do you really want to send {count} emails?").format(
             count=self.queryset.count()
         )
 
@@ -109,48 +182,72 @@ class OutboxSend(EventPermissionRequired, ActionConfirmMixin, TemplateView):
     def action_back_url(self):
         return self.request.event.orga_urls.outbox
 
-    def dispatch(self, request, *args, **kwargs):
-        if "pk" in self.kwargs:
-            try:
-                mail = self.request.event.queued_mails.get(pk=self.kwargs.get("pk"))
-            except QueuedMail.DoesNotExist:
-                messages.error(
-                    request,
-                    _(
-                        "This mail either does not exist or cannot be sent because it was sent already."
-                    ),
-                )
-                return redirect(self.request.event.orga_urls.outbox)
-            if mail.sent:
-                messages.error(request, _("This mail had been sent already."))
-            else:
-                mail.send(requestor=self.request.user)
-                messages.success(request, _("The mail has been sent."))
-            return redirect(self.request.event.orga_urls.outbox)
-        return super().dispatch(request, *args, **kwargs)
-
     @cached_property
     def queryset(self):
-        qs = self.request.event.queued_mails.filter(sent__isnull=True)
         pks = self.request.GET.get("pks") or ""
         if pks:
-            pks = pks.split(",")
-            qs = qs.filter(pk__in=pks)
+            return self.request.event.queued_mails.filter(
+                state=QueuedMailStates.DRAFT
+            ).filter(pk__in=pks.split(","))
+        qs = self.get_queryset()
+        if self.request.GET.get("failed_only"):
+            qs = qs.filter(error_data__isnull=False)
         return qs
 
     def post(self, request, *args, **kwargs):
-        mails = self.queryset
-        count = mails.count()
-        for mail in mails:
-            mail.send(requestor=self.request.user)
-        messages.success(
-            request, _("{count} mails have been sent.").format(count=count)
-        )
+        if "pk" not in self.kwargs:
+            return self.bulk_send(request)
+        return self.single_send(request)
+
+    def single_send(self, request):
+        try:
+            mail = self.request.event.queued_mails.get(pk=self.kwargs.get("pk"))
+        except QueuedMail.DoesNotExist:
+            messages.error(
+                request,
+                _(
+                    "This email either does not exist or cannot be sent because it was sent already."
+                ),
+            )
+            return redirect(self.request.event.orga_urls.outbox)
+        if mail.state != QueuedMailStates.DRAFT:
+            messages.error(request, _("This email had been sent already."))
+        else:
+            errors = get_send_mail_exceptions(request)
+            if errors:
+                for error in errors:
+                    messages.error(request, error)
+                return redirect(self.request.event.orga_urls.outbox)
+            send_draft(mail, requestor=self.request.user)
+            if request.headers.get("HX-Request"):
+                response = HttpResponse(status=200)
+                response["HX-Trigger"] = "updateSidebarCount"
+                return response
+            messages.success(request, _("The email has been sent."))
         return redirect(self.request.event.orga_urls.outbox)
+
+    def bulk_send(self, request):
+        errors = get_send_mail_exceptions(request)
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+            return redirect(request.event.orga_urls.outbox)
+
+        mail_pks = list(self.queryset.values_list("pk", flat=True))
+        if not mail_pks:
+            messages.info(request, _("No emails to send."))
+            return redirect(request.event.orga_urls.outbox)
+        return self.dispatch_async_task(
+            request,
+            task_send_outbox_mails,
+            event_id=request.event.pk,
+            mail_pks=mail_pks,
+            requestor_id=request.user.pk,
+        )
 
 
 class MailDelete(PermissionRequired, ActionConfirmMixin, TemplateView):
-    permission_required = "orga.purge_mails"
+    permission_required = "mail.delete_queuedmail"
     action_object_name = ""
 
     def get_permission_object(self):
@@ -159,11 +256,11 @@ class MailDelete(PermissionRequired, ActionConfirmMixin, TemplateView):
     @cached_property
     def queryset(self):
         mail = self.request.event.queued_mails.filter(
-            sent__isnull=True, pk=self.kwargs.get("pk")
+            state=QueuedMailStates.DRAFT, pk=self.kwargs.get("pk")
         )
         if "all" in self.request.GET and mail:
             return self.request.event.queued_mails.filter(
-                sent__isnull=True, template=mail.first().template
+                state=QueuedMailStates.DRAFT, template=mail.first().template
             )
         return mail
 
@@ -176,11 +273,11 @@ class MailDelete(PermissionRequired, ActionConfirmMixin, TemplateView):
 
     @context
     def question(self):
-        count = len(self.queryset)
+        count = self.queryset.count()
         return str(
             ngettext_lazy(
-                "Do you really want to delete this mail?",
-                "Do you really want to purge {count} mails?",
+                "Do you really want to delete this email?",
+                "Do you really want to purge {count} emails?",
                 count,
             )
         ).format(count=count)
@@ -192,7 +289,7 @@ class MailDelete(PermissionRequired, ActionConfirmMixin, TemplateView):
             messages.error(
                 request,
                 _(
-                    "This mail either does not exist or cannot be discarded because it was sent already."
+                    "This email either does not exist or cannot be discarded because it was sent already."
                 ),
             )
             return redirect(self.request.event.orga_urls.outbox)
@@ -204,8 +301,8 @@ class MailDelete(PermissionRequired, ActionConfirmMixin, TemplateView):
             request,
             str(
                 ngettext_lazy(
-                    "The mail has been discarded.",
-                    "{count} mails have been discarded.",
+                    "The email has been discarded.",
+                    "{count} emails have been discarded.",
                     mail_count,
                 )
             ).format(count=mail_count),
@@ -214,16 +311,13 @@ class MailDelete(PermissionRequired, ActionConfirmMixin, TemplateView):
         return redirect(request.event.orga_urls.outbox)
 
 
-class OutboxPurge(PermissionRequired, ActionConfirmMixin, TemplateView):
-    permission_required = "orga.purge_mails"
+class OutboxPurge(ActionConfirmMixin, OutboxList):
+    permission_required = "mail.delete_queuedmail"
     action_object_name = ""
-
-    def get_permission_object(self):
-        return self.request.event
 
     @context
     def question(self):
-        return _("Do you really want to purge {count} mails?").format(
+        return _("Do you really want to purge {count} emails?").format(
             count=self.queryset.count()
         )
 
@@ -236,27 +330,33 @@ class OutboxPurge(PermissionRequired, ActionConfirmMixin, TemplateView):
 
     @cached_property
     def queryset(self):
-        return self.request.event.queued_mails.filter(sent__isnull=True)
+        return self.get_queryset()
 
     def post(self, request, *args, **kwargs):
         qs = self.queryset
         count = qs.count()
         qs.delete()
         messages.success(
-            request, _("{count} mails have been purged.").format(count=count)
+            request, _("{count} emails have been purged.").format(count=count)
         )
         return redirect(self.request.event.orga_urls.outbox)
 
 
-class MailDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
+class MailDetail(PermissionRequired, CreateOrUpdateView):
     model = QueuedMail
     form_class = MailDetailForm
     template_name = "orga/mails/outbox_form.html"
-    write_permission_required = "orga.edit_mails"
-    permission_required = "orga.view_mails"
+    write_permission_required = "mail.update_queuedmail"
+    permission_required = "mail.view_queuedmail"
+    extra_forms_signal = "pretalx.orga.signals.mail_form"
+    messages = {}
 
     def get_object(self, queryset=None) -> QueuedMail:
-        return self.request.event.queued_mails.filter(pk=self.kwargs.get("pk")).first()
+        return (
+            self.request.event.queued_mails.prefetch_users(self.request.event)
+            .filter(pk=self.kwargs.get("pk"))
+            .first()
+        )
 
     def get_success_url(self):
         return self.object.event.orga_urls.outbox
@@ -264,12 +364,14 @@ class MailDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
     def form_valid(self, form):
         form.instance.event = self.request.event
         result = super().form_valid(form)
-        if form.has_changed():
-            action = "pretalx.mail." + ("update" if self.object else "create")
-            form.instance.log_action(action, person=self.request.user, orga=True)
         action = form.data.get("form", "save")
         if action == "send":
-            form.instance.send()
+            errors = get_send_mail_exceptions(self.request)
+            if errors:
+                for error in errors:
+                    messages.error(self.request, error)
+                return redirect(self.get_success_url())
+            send_draft(form.instance)
             messages.success(self.request, _("The email has been sent."))
         else:  # action == 'save'
             messages.success(
@@ -280,24 +382,60 @@ class MailDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
             )
         return result
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        if self.permission_action == "edit":
+            send_label = (
+                _("Save and retry") if self.object.has_error else _("Save and send")
+            )
+            context["submit_buttons"] = [
+                Button(),
+                Button(
+                    name="form",
+                    value="send",
+                    color="info",
+                    label=send_label,
+                    icon="envelope",
+                ),
+            ]
+            context["submit_buttons_extra"] = [
+                delete_link(
+                    color="danger", href=self.object.urls.delete, label=_("Discard")
+                ),
+                delete_link(
+                    href=f"{self.object.urls.delete}?all",
+                    label=_("Discard all from this template"),
+                ),
+            ]
+        elif self.object.state != QueuedMailStates.DRAFT:
+            if pk := self.object.template_id:
+                context["copy_to_draft_url"] = (
+                    f"{self.request.event.orga_urls.compose_mails_sessions}?template={pk}"
+                )
+                context["copy_to_draft_method"] = "get"
+            else:
+                context["copy_to_draft_url"] = self.object.urls.copy
+                context["copy_to_draft_method"] = "post"
+        return context
+
 
 class MailCopy(PermissionRequired, View):
-    permission_required = "orga.send_mails"
+    permission_required = "mail.send_queuedmail"
 
     def get_object(self) -> QueuedMail:
         return get_object_or_404(
             self.request.event.queued_mails, pk=self.kwargs.get("pk")
         )
 
-    def dispatch(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs):
         mail = self.get_object()
-        new_mail = mail.copy_to_draft()
-        messages.success(request, _("The mail has been copied, you can edit it now."))
+        new_mail = copy_to_draft(mail)
+        messages.success(request, _("The email has been copied, you can edit it now."))
         return redirect(new_mail.urls.edit)
 
 
 class MailPreview(PermissionRequired, View):
-    permission_required = "orga.send_mails"
+    permission_required = "mail.send_queuedmail"
 
     def get_object(self) -> QueuedMail:
         return get_object_or_404(
@@ -306,16 +444,52 @@ class MailPreview(PermissionRequired, View):
 
     def get(self, request, *args, **kwargs):
         mail = self.get_object()
-        return HttpResponse(mail.make_html())
+        return HttpResponse(delivery_html(mail))
 
 
 class ComposeMailChoice(EventPermissionRequired, TemplateView):
     template_name = "orga/mails/compose_choice.html"
-    permission_required = "orga.send_mails"
+    permission_required = "mail.send_queuedmail"
 
 
-class ComposeMailBaseView(EventPermissionRequired, FormView):
-    permission_required = "orga.send_mails"
+class ComposeMailBaseView(AsyncTaskProgressMixin, EventPermissionRequired, FormView):
+    permission_required = "mail.send_queuedmail"
+    write_permission_required = "mail.send_queuedmail"
+
+    def get_task_progress_template(self):
+        return "orga/mails/sending_progress.html"
+
+    def get_task_progress_title(self):
+        return _("Composing emails")
+
+    def get_task_success_url(self, result):
+        if result.get("skip_queue"):
+            return self.request.event.orga_urls.sent_mails
+        return self.request.event.orga_urls.outbox
+
+    def get_task_error_url(self):
+        return self.request.event.orga_urls.outbox
+
+    def get_task_success_message(self, result):
+        count = result.get("count", 0)
+        if result.get("skip_queue"):
+            return _("{count} emails have been sent.").format(count=count)
+        return phrases.orga.mails_in_outbox.format(count=count)
+
+    def handle_task_success(self, request, result):
+        super().handle_task_success(request, result)
+        render_failures = result.get("render_failures", 0)
+        if render_failures:
+            messages.warning(
+                request,
+                str(
+                    ngettext_lazy(
+                        "Could not generate one email, most likely because the session has not been scheduled yet.",
+                        "Could not generate {count} emails, most likely because their sessions have not been scheduled yet.",
+                        render_failures,
+                    )
+                ).format(count=render_failures),
+            )
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
@@ -330,20 +504,57 @@ class ComposeMailBaseView(EventPermissionRequired, FormView):
                 initial["text"] = template.text
                 initial["reply_to"] = template.reply_to
                 initial["bcc"] = template.bcc
-        for key in self.form_class.base_fields.keys():
+        for key in self.form_class.base_fields:
             if key in self.request.GET:
                 initial[key] = self.request.GET.get(key)
         kwargs["initial"] = initial
-        return kwargs
 
-    def get_success_url(self):
-        return getattr(self, "success_url", self.request.event.orga_urls.outbox)
+        errors = get_send_mail_exceptions(self.request)
+        kwargs["may_skip_queue"] = not bool(errors)
+        return kwargs
 
     def get_context_data(self, *args, **kwargs):
         ctx = super().get_context_data(*args, **kwargs)
         ctx["output"] = getattr(self, "output", None)
-        ctx["mail_count"] = getattr(self, "mail_count", None)
+        ctx["mail_count"] = getattr(self, "mail_count", None) or 0
+        ctx["confirm_skip_queue"] = getattr(self, "confirm_skip_queue", False)
+        ctx["submit_buttons"] = [
+            Button(
+                color="outline-info",
+                name="action",
+                value="preview",
+                label=pgettext_lazy(
+                    "action: preview the email before sending", "Preview email"
+                ),
+                icon=None,
+            )
+        ]
+        if self.request.method == "POST" and ctx["form"].is_valid():
+            if ctx["confirm_skip_queue"]:
+                ctx["submit_buttons"].append(
+                    Button(
+                        color="danger",
+                        name="action",
+                        value="send_immediately",
+                        icon="envelope",
+                        label=str(
+                            ngettext_lazy(
+                                "Send {count} email now",
+                                "Send {count} emails now",
+                                ctx["mail_count"],
+                            )
+                        ).format(count=ctx["mail_count"]),
+                    )
+                )
+            else:
+                ctx["submit_buttons"].append(Button(label=_("Send to outbox")))
         return ctx
+
+    def get_recipient_count(self, form):
+        # Approximate, deduplicated recipient count. Mirrors the preview: it
+        # does not run rendering, so emails with invalid placeholders are not
+        # subtracted here.
+        return len({str(res) for res in form.get_recipients()})
 
     def form_valid(self, form):
         preview = self.request.POST.get("action") == "preview"
@@ -354,66 +565,88 @@ class ComposeMailBaseView(EventPermissionRequired, FormView):
             result = form.get_recipients()
             if not result:
                 messages.error(
-                    self.request,
-                    _("There are no recipients matching this selection."),
+                    self.request, _("There are no recipients matching this selection.")
                 )
                 return self.get(self.request, *self.args, **self.kwargs)
-            from pretalx.common.templatetags.rich_text import rich_text
+
+            import bleach  # noqa: PLC0415 -- slow import
 
             for locale in self.request.event.locales:
                 with language(locale):
-                    context_dict = TolerantDict()
+                    context_dict = {}
+                    title = _(
+                        "This value will be replaced based on dynamic parameters."
+                    )
                     for key, value in form.get_valid_placeholders().items():
-                        context_dict[key] = (
-                            '<span class="placeholder" title="{title}">{content}</span>'.format(
-                                title=_(
-                                    "This value will be replaced based on dynamic parameters."
-                                ),
-                                content=escape(value.render_sample(self.request.event)),
-                            )
+                        content = escape(value.render_sample(self.request.event))
+                        context_dict[key] = mark_safe(  # noqa: S308  -- content is escape()-d sample text
+                            f'<span class="placeholder" title="{title}">{content}</span>'
                         )
 
                     subject = bleach.clean(
                         form.cleaned_data["subject"].localize(locale), tags={}
                     )
                     preview_subject = get_prefixed_subject(
-                        self.request.event, subject.format_map(context_dict)
+                        self.request.event, format_map(subject, context_dict)
                     )
                     message = form.cleaned_data["text"].localize(locale)
-                    preview_text = rich_text(message.format_map(context_dict))
+                    # Mirror ``render_template_to_mail`` so the preview
+                    # matches delivery byte-for-byte.
+                    preview_text = render_mail_body(
+                        format_map(message, context_dict, mode=MODE_HTML)
+                    )
                     self.output[locale] = {
                         "subject": _("Subject: {subject}").format(
                             subject=preview_subject
                         ),
                         "html": preview_text,
                     }
-                    # Very rough method to deduplicate recipients, but good enough for a preview
-                    self.mail_count = len({str(res) for res in result})
+            self.mail_count = self.get_recipient_count(form)
             return self.get(self.request, *self.args, **self.kwargs)
 
-        result = form.save()
-        if len(result) and result[0].sent:
-            self.success_url = self.request.event.orga_urls.sent_mails
-            messages.success(
-                self.request,
-                _("{count} emails have been sent.").format(count=len(result)),
-            )
-        else:
-            self.success_url = self.request.event.orga_urls.outbox
-            messages.success(
-                self.request,
-                phrases.orga.mails_in_outbox.format(count=len(result)),
-            )
-        return super().form_valid(form)
+        skip_queue = form.cleaned_data.get("skip_queue")
+        confirmed = self.request.POST.get("action") == "send_immediately"
+        if skip_queue and not confirmed:
+            if not form.get_recipients():
+                messages.error(
+                    self.request, _("There are no recipients matching this selection.")
+                )
+                return self.get(self.request, *self.args, **self.kwargs)
+            self.mail_count = self.get_recipient_count(form)
+            self.confirm_skip_queue = True
+            return self.get(self.request, *self.args, **self.kwargs)
+
+        task_data = form.save_template_and_get_task_data()
+        return self.dispatch_async_task(
+            self.request, task_create_mails_for_template, **task_data
+        )
 
 
 class ComposeTeamsMail(ComposeMailBaseView):
     form_class = WriteTeamsMailForm
     template_name = "orga/mails/compose_reviewer_mail_form.html"
-    permission_required = "orga.send_reviewer_mails"
+    permission_required = "event.update_team"
+
+    def dispatch(self, request, *args, **kwargs):
+        # Gotta handle errors directly here, as these emails are always sent directly
+        errors = get_send_mail_exceptions(request)
+        if errors:
+            for error in errors:
+                messages.error(request, error)
+            return redirect(self.request.event.orga_urls.outbox)
+        return super().dispatch(request, *args, **kwargs)
 
     def get_success_url(self):
         return self.request.event.orga_urls.outbox
+
+    def form_valid(self, form):
+        if self.request.POST.get("action") == "preview":
+            return super().form_valid(form)
+        sent = form.save()
+        messages.success(
+            self.request, _("{count} emails have been sent.").format(count=len(sent))
+        )
+        return redirect(self.get_success_url())
 
 
 class ComposeSessionMail(ComposeMailBaseView):
@@ -437,160 +670,107 @@ class ComposeSessionMail(ComposeMailBaseView):
         return kwargs
 
 
-class ComposeDraftReminders(EventPermissionRequired, FormView):
-    form_class = DraftRemindersForm
+class ComposeDraftReminders(EventPermissionRequired, TemplateView):
     template_name = "orga/mails/send_draft_reminders.html"
-    permission_required = "orga.send_mails"
+    permission_required = "mail.send_queuedmail"
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["event"] = self.request.event
-        return kwargs
-
-    def get_success_url(self):
-        return self.request.event.orga_urls.base
-
-    def form_valid(self, form):
-        result = form.save()
-        messages.success(
-            self.request,
-            _("{count} emails have been sent.").format(count=result),
+    @context
+    @cached_property
+    def draft_reminder_template(self):
+        return mail_template_by_role(
+            self.request.event, MailTemplateRoles.DRAFT_REMINDER
         )
-        return super().form_valid(form)
+
+    @context
+    def submit_buttons(self):
+        return [send_button()]
+
+    def post(self, request, *args, **kwargs):
+        template = self.draft_reminder_template
+        submissions = Submission.all_objects.filter(
+            state=SubmissionStates.DRAFT, event=request.event
+        )
+        mail_count = 0
+        for submission in submissions:
+            for speaker in submission.sorted_speakers:
+                mail = render_template_to_mail(
+                    template,
+                    locale=submission.get_email_locale(speaker.user.locale),
+                    context_kwargs={"submission": submission, "user": speaker.user},
+                )
+                mail.to = speaker.user.email
+                send_transient(mail)
+                mail_count += 1
+        messages.success(
+            request, _("{count} emails have been sent.").format(count=mail_count)
+        )
+        return redirect(request.event.orga_urls.base)
 
 
-class TemplateList(EventPermissionRequired, TemplateView):
-    template_name = "orga/mails/template_list.html"
-    permission_required = "orga.view_mail_templates"
-
-    def get_context_data(self, **kwargs):
-        result = super().get_context_data(**kwargs)
-        result["templates"] = [
-            {
-                "title": _("Acknowledge Mail"),
-                "obj": self.request.event.ack_template,
-                "form": MailTemplateForm(
-                    instance=self.request.event.ack_template,
-                    read_only=True,
-                    event=self.request.event,
-                ),
-            },
-            {
-                "title": _("Accept Mail"),
-                "obj": self.request.event.accept_template,
-                "form": MailTemplateForm(
-                    instance=self.request.event.accept_template,
-                    read_only=True,
-                    event=self.request.event,
-                ),
-            },
-            {
-                "title": _("Reject Mail"),
-                "obj": self.request.event.reject_template,
-                "form": MailTemplateForm(
-                    instance=self.request.event.reject_template,
-                    read_only=True,
-                    event=self.request.event,
-                ),
-            },
-            {
-                "title": _("New schedule version"),
-                "obj": self.request.event.update_template,
-                "form": MailTemplateForm(
-                    instance=self.request.event.update_template,
-                    read_only=True,
-                    event=self.request.event,
-                ),
-            },
-            {
-                "title": _("Unanswered questions reminder"),
-                "obj": self.request.event.question_template,
-                "form": MailTemplateForm(
-                    instance=self.request.event.question_template,
-                    read_only=True,
-                    event=self.request.event,
-                ),
-            },
-        ]
-        pks = [
-            template.pk if template else None
-            for template in self.request.event.fixed_templates
-        ]
-        result["templates"] += [
-            {
-                "title": str(template.subject),
-                "obj": template,
-                "form": MailTemplateForm(
-                    instance=template, read_only=True, event=self.request.event
-                ),
-                "custom": True,
-            }
-            for template in self.request.event.mail_templates.exclude(
-                pk__in=pks
-            ).exclude(is_auto_created=True)
-        ]
-        return result
-
-
-class TemplateDetail(PermissionRequired, ActionFromUrl, CreateOrUpdateView):
+class MailTemplateView(OrgaCRUDView):
     model = MailTemplate
     form_class = MailTemplateForm
-    template_name = "orga/mails/template_form.html"
-    permission_required = "orga.view_mail_templates"
-    write_permission_required = "orga.edit_mail_templates"
+    table_class = MailTemplateTable
+    template_namespace = "orga/mails"
+    messages = {
+        "create": phrases.base.saved,
+        "update": _(
+            "The template has been saved - note that already pending emails that are based on this template will not be changed!"
+        ),
+        "delete": phrases.base.deleted,
+    }
+    create_button_label = _("New custom template")
 
-    def get_form_kwargs(self):
-        kwargs = super().get_form_kwargs()
-        kwargs["event"] = self.request.event
-        return kwargs
-
-    def get_object(self) -> MailTemplate:
-        return MailTemplate.objects.filter(
-            event=self.request.event, pk=self.kwargs.get("pk"), is_auto_created=False
-        ).first()
-
-    @cached_property
-    def object(self):
-        return self.get_object()
-
-    @cached_property
-    def permission_object(self):
-        return self.object or self.request.event
-
-    def get_permission_object(self):
-        return self.permission_object
-
-    def get_success_url(self):
-        return self.request.event.orga_urls.mail_templates
-
-    def form_valid(self, form):
-        form.instance.event = self.request.event
-        if form.has_changed():
-            action = "pretalx.mail_template." + ("update" if self.object else "create")
-            form.instance.log_action(action, person=self.request.user, orga=True)
-        messages.success(
-            self.request,
-            "The template has been saved - note that already pending emails that are based on this template will not be changed!",
-        )
-        return super().form_valid(form)
-
-
-class TemplateDelete(PermissionRequired, View):
-    permission_required = "orga.edit_mail_templates"
-
-    def get_object(self) -> MailTemplate:
-        return get_object_or_404(
-            MailTemplate.objects.all(),
-            event=self.request.event,
-            pk=self.kwargs.get("pk"),
+    def get_queryset(self):
+        return (
+            self.request.event.mail_templates.all()
+            .exclude(is_auto_created=True)
+            .order_by("role")
         )
 
-    def dispatch(self, request, *args, **kwargs):
-        super().dispatch(request, *args, **kwargs)
-        template = self.get_object()
-        template.log_action(
-            "pretalx.mail_template.delete", person=self.request.user, orga=True
+    def get_generic_title(self, instance=None):
+        if instance:
+            if not instance.role:
+                return _("Email template") + f": {instance.subject}"
+            return _("Email template") + f": {instance.get_role_display()}"
+        if self.action == "create":
+            return _("New email template")
+        return _("Email templates")
+
+
+class MailSendingStatus(EventPermissionRequired, View):
+    permission_required = "mail.list_queuedmail"
+
+    def get(self, request, *args, **kwargs):
+        ids_param = request.GET.get("ids", "")
+        pks = [int(pk) for pk in ids_param.split(",") if pk.isdigit()]
+        if not pks:
+            return HttpResponse(status=286)
+        mails = list(request.event.queued_mails.filter(pk__in=pks))
+        html = render_to_string(
+            "orga/mails/includes/bulk_status_fragment.html",
+            {"mails": mails},
+            request=request,
         )
-        template.delete()
-        messages.success(request, "The template has been deleted.")
-        return redirect(request.event.orga_urls.mail_templates)
+        still_sending = any(m.state == QueuedMailStates.SENDING for m in mails)
+        status = 200 if still_sending else 286
+        response = HttpResponse(html, status=status)
+        if not still_sending:
+            response["HX-Trigger"] = "updateSidebarCount"
+        return response
+
+
+class MailSidebarCount(EventPermissionRequired, View):
+    permission_required = "mail.list_queuedmail"
+
+    def get(self, request, *args, **kwargs):
+        counts = request.event.queued_mails.filter(
+            state=QueuedMailStates.DRAFT
+        ).aggregate(
+            pending_count=Count("pk"),
+            failed_count=Count("pk", filter=Q(error_data__isnull=False)),
+        )
+        html = render_to_string(
+            "orga/mails/sidebar_count_fragment.html", counts, request=request
+        )
+        return HttpResponse(html)

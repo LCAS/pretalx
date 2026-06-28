@@ -1,9 +1,11 @@
 {% extends "agenda/base.html" %}
+{% comment %}
+SPDX-FileCopyrightText: 2018-present Tobias Kunze
+SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+{% endcomment %}
 
-{% load compress %}
 {% load i18n %}
 {% load rich_text %}
-{% load static %}
 
 {% block agenda_content %}
     <p>
@@ -11,18 +13,18 @@
             {{ request.event.featured_sessions_text|rich_text }}
         {% else %}
             {% if talks %}
-                <b>{% translate "Welcome to our list of featured sessions!" %}</b>
+                <strong>{% translate "Welcome to our list of featured sessions!" %}</strong>
                 <br>
                 <br>
                 {% blocktranslate trimmed %}
-                    We prepared a list of exciting sessions, so you can get a feel for our
-                    conference. Please keep in mind that this is not our full schedule.
-                    We will follow up with the full schedule in time, stay tuned!
+                    We prepared a list of exciting sessions, so you can get a feel for our conference. Please keep in
+                    mind that this is not our full schedule. We will follow up with the full schedule in time, stay
+                    tuned!
                 {% endblocktranslate %}
             {% else %}
                 {% blocktranslate trimmed %}
-                    In the near future you will see a curated list of sessions we’d like
-                    to show off here. Right now we are busy reviewing proposals.<br>
+                    In the near future you will see a curated list of sessions we’d like to show off here. Right now we
+                    are busy reviewing proposals.<br>
                     Check back later!
                 {% endblocktranslate %}
             {% endif %}
@@ -32,7 +34,11 @@
         {% for talk in talks %}
             <section>
                 <h3 class="talk-title">
-                    <div>{{ quotation_open }}{{ talk.title }}{{ quotation_close }}</div>
+                    <div>
+                        <a href="{{ talk.urls.public }}">
+                            {{ quotation_open }}{{ talk.title }}{{ quotation_close }}
+                        </a>
+                    </div>
                     <small class="text-muted">
                         {% if talk.display_speaker_names %}{{ talk.display_speaker_names }};{% endif %}
                         <i>{{ talk.submission_type.name }}</i>

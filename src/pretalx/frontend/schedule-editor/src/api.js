@@ -1,8 +1,18 @@
+// SPDX-FileCopyrightText: 2022-present Tobias Kunze
+// SPDX-License-Identifier: Apache-2.0
+
 const api = {
 	eventSlug: window.location.pathname.split("/")[3],
+	getCsrfToken () {
+		const row = document.cookie.split('; ').find(part => part.startsWith('pretalx_csrftoken='))
+		return row ? decodeURIComponent(row.split('=').slice(1).join('=')) : null
+	},
 	http (verb, url, body) {
 		var fullHeaders = {}
 		fullHeaders['Content-Type'] = 'application/json'
+		if (verb && verb !== 'GET') {
+			fullHeaders['X-CSRFToken'] = api.getCsrfToken()
+		}
 
 		const options = {
 			method: verb || 'GET',
@@ -85,6 +95,7 @@ const api = {
 			duration: talk.duration,
 			title: talk.title,
 			description: talk.description,
+			slot_type: talk.slot_type,
 		})
 	},
 	deleteTalk (talk) {

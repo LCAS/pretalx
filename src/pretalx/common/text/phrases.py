@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import random
 from abc import ABCMeta
 
@@ -7,7 +10,7 @@ from django.utils.translation import pgettext_lazy
 _phrase_book = {}
 
 
-class PhrasesMetaClass(ABCMeta):  # noqa
+class PhrasesMetaClass(ABCMeta):
     def __new__(cls, class_name, bases, namespace, app):
         new = super().__new__(cls, class_name, bases, namespace)
         _phrase_book[app] = new()
@@ -21,7 +24,7 @@ class Phrases(metaclass=PhrasesMetaClass, app=""):
     def __getattribute__(self, attribute):
         result = super().__getattribute__(attribute)
         if isinstance(result, (list, tuple)):
-            return random.choice(result)
+            return random.choice(result)  # noqa: S311  -- cosmetic phrase variation
         return result
 
 
@@ -48,7 +51,7 @@ class BasePhrases(Phrases, app="base"):
     cancel = _("Cancel")
     # Translators: This is the label on edit buttons.
     edit = _("Edit")
-    all_choices = _("all")
+    all_choices = _("All")
     # Translators: This is a label on navigation elements leading to the previous page.
     back_button = _("Back")
     # Translators: This is a label on delete buttons.
@@ -58,6 +61,7 @@ class BasePhrases(Phrases, app="base"):
     delete_warning = _(
         "Please make sure that this is the item you want to delete. This action cannot be undone!"
     )
+    deleted = _("The item has been deleted.")
 
     saved = _("Your changes have been saved.")
     back_try_again = _("Please go back and try again.")
@@ -65,7 +69,7 @@ class BasePhrases(Phrases, app="base"):
     # Translators: This is an established term in the context of software development.
     bad_request = _("Bad request.")
     error_sending_mail = _(
-        "There was an error sending the mail. Please try again later."
+        "There was an error sending the email. Please try again later."
     )
     error_saving_changes = _(
         "We had trouble saving your input – Please see below for details."
@@ -77,14 +81,6 @@ class BasePhrases(Phrases, app="base"):
         _("Sorry, you do not have the required permissions to access this page."),
     )
     not_found = _("Page not found.")
-    not_found_long = [
-        _("This page does not exist."),
-        _("Huh, I could have sworn there was something here."),
-        "",
-        _("This page is no more."),
-        _("This page has ceased to be."),
-        _("Huh."),
-    ]
 
     enter_email = _("Email address")
     new_password = _("New password")
@@ -104,7 +100,6 @@ class BasePhrases(Phrases, app="base"):
         link_start='<a href="https://docs.pretalx.org/user/markdown/" target="_blank" rel="noopener">',
         link_end="</a>",
     )
-    public_content = _("This content will be shown publicly.")
 
     quotation_open = pgettext_lazy("opening quotation mark", "“")
     quotation_close = pgettext_lazy("closing quotation mark", "”")
@@ -114,10 +109,26 @@ class BasePhrases(Phrases, app="base"):
     language = _("Language")
 
     # Translators: Used as settings/section heading
-    general = _("General")
+    general = pgettext_lazy("settings section: general/miscellaneous", "General")
 
     email_subject = pgettext_lazy("email subject", "Subject")
     # Translators: Text is used to describe the main text body of an email, or of
     # similar options like the main text of the CfP or a review. It's separate from
     # the "text" input type used in questions.
     text_body = _("Text")
+
+    internal_notes = _("Internal notes")
+    internal_notes_help = _(
+        "Internal notes for other organisers/reviewers. Not visible to the speakers or the public."
+    )
+    slug_validator_message = _(
+        "The slug may only contain letters, numbers, dots and dashes."
+    )
+    password_reset_confirm = _(
+        "Do you really want to reset this user\u2019s password? They will not be able to log in until they set a new password."
+    )
+    duration_help = _("Leave empty to use the default duration for the session type.")
+    image_help = _("Use this if you want an illustration to go with your proposal.")
+
+    search = pgettext_lazy("action/label: search", "Search")
+    filter_action = pgettext_lazy("action: filter/narrow down results", "Filter")

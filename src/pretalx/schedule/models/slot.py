@@ -1,28 +1,51 @@
+# SPDX-FileCopyrightText: 2017-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# This file contains Apache-2.0 licensed contributions copyrighted by the following contributors:
+# SPDX-FileContributor: Franziska Kunsmann
+
 import datetime as dt
 import re
 import string
+import unicodedata
 import uuid
-from contextlib import suppress
-from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
 
-import vobject
-from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 from django_scopes import ScopedManager
 from i18nfield.fields import I18nCharField
 
+from pretalx.agenda.rules import is_agenda_submission_visible, is_agenda_visible
+from pretalx.common.models.fields import DateTimeField
 from pretalx.common.models.mixins import PretalxModel
+from pretalx.common.models.settings import GlobalSettings
 from pretalx.common.text.serialize import serialize_duration
-from pretalx.common.urls import get_base_url
+from pretalx.schedule.enums import SlotType
+from pretalx.schedule.models.availability import Availability
+from pretalx.schedule.validators.slot import (
+    validate_slot_time_range,
+    validate_slot_within_event,
+)
+from pretalx.submission.rules import is_break, is_wip, orga_can_change_submissions
 
 INSTANCE_IDENTIFIER = None
-with suppress(Exception):
-    from pretalx.common.models.settings import GlobalSettings
+WHITESPACE_REGEX = re.compile(r"\W+")
+FRAB_SLUG_REGEX = re.compile(f"[^{string.ascii_letters + string.digits + '-'}]")
 
-    INSTANCE_IDENTIFIER = GlobalSettings().get_instance_identifier()
+
+class TalkSlotQuerySet(models.QuerySet):
+    def with_sorted_speakers(self):
+        from pretalx.submission.domain.queries.submission import (  # noqa: PLC0415 -- thin method
+            sorted_speakers_prefetch,
+        )
+
+        return self.prefetch_related(sorted_speakers_prefetch("submission__"))
+
+
+class TalkSlotManager(models.Manager.from_queryset(TalkSlotQuerySet)):
+    pass
 
 
 class TalkSlot(PretalxModel):
@@ -33,6 +56,7 @@ class TalkSlot(PretalxModel):
     TalkSlots always belong to one submission and one :class:`~pretalx.schedule.models.schedule.Schedule`.
 
     :param is_visible: This parameter is set on schedule release. Only confirmed talks will be visible.
+    :param slot_type: For non-submission slots, distinguishes breaks (visible) from blockers (hidden).
     """
 
     submission = models.ForeignKey(
@@ -47,7 +71,7 @@ class TalkSlot(PretalxModel):
         on_delete=models.PROTECT,
         related_name="talks",
         verbose_name=_("Room"),
-        help_text=_("The room this talk is scheduled in, if any"),
+        help_text=_("The room this session is scheduled in, if any"),
         null=True,
         blank=True,
     )
@@ -55,26 +79,65 @@ class TalkSlot(PretalxModel):
         to="schedule.Schedule", on_delete=models.PROTECT, related_name="talks"
     )
     is_visible = models.BooleanField(default=False)
-    start = models.DateTimeField(
+    slot_type = models.CharField(
+        max_length=10,
+        choices=SlotType.choices,
+        null=True,
+        blank=True,
+        verbose_name=_("Slot type"),
+        help_text=_(
+            "For non-submission slots: 'break' for public breaks, 'blocker' for hidden blockers"
+        ),
+    )
+    start = DateTimeField(
         null=True,
         verbose_name=_("Start"),
-        help_text=_("When the talk starts, if it is currently scheduled"),
+        help_text=_("When the session starts, if it is currently scheduled"),
     )
-    end = models.DateTimeField(
+    end = DateTimeField(
         null=True,
         verbose_name=_("End"),
-        help_text=_("When the talk ends, if it is currently scheduled"),
+        help_text=_("When the session ends, if it is currently scheduled"),
     )
     description = I18nCharField(null=True)
 
-    objects = ScopedManager(event="schedule__event")
+    objects = ScopedManager(event="schedule__event", _manager_class=TalkSlotManager)
 
     class Meta:
         ordering = ("start",)
+        rules_permissions = {
+            "list": is_agenda_visible | orga_can_change_submissions,
+            "view": (
+                # public view is only possible for non-wip slots
+                ~is_wip
+                # visibility then is down to the submission being visible in the
+                # agenda or the slot being a break. further filtering for is_visible
+                # is down to the API/view
+                & ((is_break & is_agenda_visible) | is_agenda_submission_visible)
+            )
+            | orga_can_change_submissions,
+            "update": is_wip & orga_can_change_submissions,
+        }
 
     def __str__(self):
         """Help when debugging."""
-        return f'TalkSlot(event={self.schedule.event.slug}, submission={getattr(self.submission, "title", None)}, schedule={self.schedule.version})'
+        return f"TalkSlot(event={self.schedule.event.slug}, submission={getattr(self.submission, 'title', None)}, schedule={self.schedule.version})"
+
+    def clean(self):
+        super().clean()
+        event = self.event
+        errors = {}
+        for field in ("start", "end"):
+            try:
+                validate_slot_within_event(getattr(self, field), event=event)
+            except ValidationError as exc:
+                errors[field] = exc.messages
+        try:
+            validate_slot_time_range(start=self.start, end=self.end)
+        except ValidationError as exc:
+            errors.setdefault("end", []).extend(exc.messages)
+        if errors:
+            raise ValidationError(errors)
 
     @cached_property
     def event(self):
@@ -98,7 +161,7 @@ class TalkSlot(PretalxModel):
     def pentabarf_export_duration(self):
         duration = dt.timedelta(minutes=self.duration)
         days = duration.days
-        hours = duration.total_seconds() // 3600 - days * 24
+        hours = int(duration.total_seconds() // 3600 - days * 24)
         minutes = duration.seconds // 60 % 60
         return f"{hours:02}{minutes:02}00"
 
@@ -121,37 +184,21 @@ class TalkSlot(PretalxModel):
             return self.real_end.astimezone(self.event.tz)
 
     @cached_property
+    def signup_status(self) -> str | None:
+        if hasattr(self, "_annotated_signup_status"):
+            return self._annotated_signup_status
+        if not self.submission_id:
+            return None
+        return self.submission.signup_status
+
+    @cached_property
     def as_availability(self):
         """'Casts' a slot as.
 
         :class:`~pretalx.schedule.models.availability.Availability`, useful for
         availability arithmetic.
         """
-        from pretalx.schedule.models import Availability
-
-        return Availability(
-            start=self.start,
-            end=self.real_end,
-        )
-
-    def copy_to_schedule(self, new_schedule, save=True):
-        """Create a new slot for the given.
-
-        :class:`~pretalx.schedule.models.schedule.Schedule` with all other
-        fields identical to this one.
-        """
-        new_slot = TalkSlot(schedule=new_schedule)
-
-        for field in (
-            fn for fn in self._meta.fields if fn.name not in ("id", "schedule")
-        ):
-            setattr(new_slot, field.name, getattr(self, field.name))
-
-        if save:
-            new_slot.save()
-        return new_slot
-
-    copy_to_schedule.alters_data = True
+        return Availability(start=self.start, end=self.real_end)
 
     def is_same_slot(self, other_slot) -> bool:
         """Checks if both slots have the same room and start time."""
@@ -159,7 +206,7 @@ class TalkSlot(PretalxModel):
 
     @cached_property
     def id_suffix(self):
-        if not self.event.feature_flags["present_multiple_times"]:
+        if not self.event.get_feature_flag("present_multiple_times"):
             return ""
         all_slots = list(
             TalkSlot.objects.filter(
@@ -172,51 +219,20 @@ class TalkSlot(PretalxModel):
 
     @cached_property
     def frab_slug(self):
-        title = re.sub(r"\W+", "-", self.submission.title)
-        legal_chars = string.ascii_letters + string.digits + "-"
-        pattern = f"[^{legal_chars}]+"
-        title = re.sub(pattern, "", title)
+        title = re.sub(WHITESPACE_REGEX, "-", self.submission.title)
         title = title.lower()
-        title = title.strip("_")
-        return f"{self.event.slug}-{self.submission.pk}{self.id_suffix}-{title}"
+        title = unicodedata.normalize("NFD", title).encode("ASCII", "ignore").decode()
+        title = re.sub(FRAB_SLUG_REGEX, "", title)
+        title = title.strip("-")
+        if title:
+            return f"{self.event.slug}-{self.submission.pk}{self.id_suffix}-{title}"
+        return f"{self.event.slug}-{self.submission.pk}{self.id_suffix}"
 
     @cached_property
     def uuid(self):
         """A UUID5, calculated from the submission code and the instance
         identifier."""
-        global INSTANCE_IDENTIFIER
+        global INSTANCE_IDENTIFIER  # noqa: PLW0603 -- module-level cache for instance identifier
         if not INSTANCE_IDENTIFIER:
-            from pretalx.common.models.settings import GlobalSettings
-
             INSTANCE_IDENTIFIER = GlobalSettings().get_instance_identifier()
         return uuid.uuid5(INSTANCE_IDENTIFIER, self.submission.code + self.id_suffix)
-
-    def build_ical(self, calendar, creation_time=None, netloc=None):
-        if not self.start or not self.local_end or not self.room or not self.submission:
-            return
-        creation_time = creation_time or dt.datetime.now(ZoneInfo("UTC"))
-        netloc = netloc or urlparse(get_base_url(self.event)).netloc
-
-        vevent = calendar.add("vevent")
-        vevent.add("summary").value = (
-            f"{self.submission.title} - {self.submission.display_speaker_names}"
-        )
-        vevent.add("dtstamp").value = creation_time
-        vevent.add("location").value = str(self.room.name)
-        vevent.add("uid").value = "pretalx-{}-{}{}@{}".format(
-            self.submission.event.slug, self.submission.code, self.id_suffix, netloc
-        )
-
-        vevent.add("dtstart").value = self.local_start
-        vevent.add("dtend").value = self.local_end
-        vevent.add("description").value = self.submission.abstract or ""
-        vevent.add("url").value = self.submission.urls.public.full()
-
-    def full_ical(self):
-        netloc = urlparse(settings.SITE_URL).netloc
-        cal = vobject.iCalendar()
-        cal.add("prodid").value = "-//pretalx//{}//{}".format(
-            netloc, self.submission.code
-        )
-        self.build_ical(cal)
-        return cal

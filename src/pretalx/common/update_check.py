@@ -1,9 +1,14 @@
+# SPDX-FileCopyrightText: 2019-present Tobias Kunze
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+
 import datetime as dt
+import logging
 import sys
 import uuid
 
-import requests
+import urllib3
 from django.conf import settings
+from django.db import connection
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.timezone import now
@@ -14,11 +19,31 @@ from i18nfield.strings import LazyI18nString
 
 from pretalx import __version__ as pretalx_version
 from pretalx.celery_app import app
-from pretalx.common.mail import mail_send_task
 from pretalx.common.models.settings import GlobalSettings
 from pretalx.common.plugins import get_all_plugins
 from pretalx.common.signals import minimum_interval, periodic_task
 from pretalx.event.models import Event
+from pretalx.mail.tasks import task_send_transient
+
+logger = logging.getLogger(__name__)
+
+
+def get_python_version():
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+def get_database_info():
+    # Best-effort telemetry via Django's backend API. Any failure must degrades
+    # to "unknown" rather than aborting the update check.
+    vendor = "unknown"
+    version = "unknown"
+    try:
+        vendor = connection.vendor
+        version = ".".join(str(part) for part in connection.get_database_version())
+    except Exception as e:  # noqa: BLE001 -- never break telemetry
+        logger.debug("Could not determine database info: %s", e)
+
+    return {"type": vendor, "version": version}
 
 
 @receiver(signal=periodic_task)
@@ -46,7 +71,7 @@ def update_check():
     if not gs.settings.update_check_id:
         gs.settings.set("update_check_id", uuid.uuid4().hex)
 
-    if "runserver" in sys.argv or "devserver" in sys.argv:  # pragma: no cover
+    if "runserver" in sys.argv or "devserver" in sys.argv:
         gs.settings.set("update_check_last", now())
         gs.settings.set("update_check_result", {"error": "development"})
         return
@@ -54,6 +79,8 @@ def update_check():
     check_payload = {
         "id": gs.settings.update_check_id,
         "version": pretalx_version,
+        "python_version": get_python_version(),
+        "database": get_database_info(),
         "events": {
             "total": Event.objects.count(),
             "public": Event.objects.filter(is_public=True).count(),
@@ -64,18 +91,20 @@ def update_check():
         ],
     }
     try:
-        response = requests.post(
+        response = urllib3.request(
+            "POST",
             "https://pretalx.com/.update_check/",
             json=check_payload,
             timeout=30,
+            retries=False,
         )
-    except requests.RequestException:  # pragma: no cover
+    except urllib3.exceptions.HTTPError:
         gs.settings.set("update_check_last", now())
         gs.settings.set("update_check_result", {"error": "unavailable"})
         return
 
     gs.settings.set("update_check_last", now())
-    if response.status_code != 200:
+    if response.status != 200:
         gs.settings.set("update_check_result", {"error": "http_error"})
         return
 
@@ -94,7 +123,7 @@ def send_update_notification_email():
     if not gs.settings.update_check_email:
         return
 
-    mail_send_task.apply_async(
+    task_send_transient.apply_async(
         kwargs={
             "to": [gs.settings.update_check_email],
             "subject": _("pretalx update available"),
@@ -108,7 +137,7 @@ def send_update_notification_email():
                         "Larger updates are also announced with upgrade notes on the pretalx.com blog:\n\n"
                         "  https://pretalx.com/p/news"
                         "\n\nBest regards,\nyour pretalx developers"
-                    ),
+                    )
                 )
             ).format(
                 base_url=settings.SITE_URL,
