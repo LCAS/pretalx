@@ -116,9 +116,12 @@ include-package-data = true
 version = {attr = "pretalx.__version__"}
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["pretalx*"]
+where = ["src", "src/plugins/pretalx-socialauth"]
+include = ["pretalx*", "pretalx_socialauth*"]
 exclude = ["pretalx.frontend.node_modules*"]
+
+[project.entry-points."pretalx.plugin"]
+pretalx_socialauth = "pretalx_socialauth:PretalxPluginMeta"
 
 [tool.check-manifest]
 ignore = [

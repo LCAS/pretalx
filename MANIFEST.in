@@ -49,5 +49,10 @@ recursive-exclude src/pretalx/frontend/node_modules *
 # in dist/ and is installed into STATIC_ROOT separately.
 recursive-include src/pretalx/frontend/schedule-editor/dist *
 
+# Bundled plugins
+recursive-include src/plugins/pretalx-socialauth/pretalx_socialauth/static *
+recursive-include src/plugins/pretalx-socialauth/pretalx_socialauth/templates *
+recursive-include src/plugins/pretalx-socialauth/pretalx_socialauth/locale *
+
 global-exclude *.py[co]
 global-exclude __pycache__
