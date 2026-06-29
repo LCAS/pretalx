@@ -1,0 +1,3 @@
+[submodule "src/plugins/pretalx-socialauth"]
+	path = src/plugins/pretalx-socialauth
+	url = https://github.com/marc-hanheide/pretalx-socialauth.git
