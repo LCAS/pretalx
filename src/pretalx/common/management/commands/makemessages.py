@@ -31,8 +31,11 @@ from pretalx.common.signals import register_locales
 
 def pathreplace(left, right):
     left.mkdir(parents=True, exist_ok=True)
-    right.mkdir(parents=True, exist_ok=True)
-    left.replace(right)
+    if right.exists():
+        shutil.rmtree(right)
+    right.parent.mkdir(parents=True, exist_ok=True)
+    # shutil.move() falls back to copy+delete on EXDEV (e.g. Docker overlay layers)
+    shutil.move(left, right)
 
 
 class Command(Parent):
@@ -74,7 +77,8 @@ class Command(Parent):
 
             if new_dir.exists():
                 shutil.rmtree(new_dir)
-            translation_path.replace(new_dir)
+            # shutil.move() falls back to copy+delete on EXDEV (e.g. Docker overlay layers)
+            shutil.move(translation_path, new_dir)
 
         super().handle(*args, **options)
 
