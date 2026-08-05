@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pretalx-ref-wording"
+version = "0.1.0"
+description = "Overrides pretalx wording (Proposal/Submission/Speaker) for use in REF-style output review processes."
+readme = "README.rst"
+requires-python = ">=3.10"
+
+[project.entry-points."pretalx.plugin"]
+pretalx_ref_wording = "pretalx_ref_wording:PretalxPluginMeta"

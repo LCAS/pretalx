@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-Pretalx-AGPL-3.0-Terms
+#
+# Wording override catalog for the pretalx_ref_wording plugin.
+#
+# This is NOT a real translation - it is a variant of English ("en-rex")
+# used to rename terms for REF-style output review processes without
+# changing any underlying workflow or logic.
+#
+# HOW TO USE:
+#   - Add a msgstr for any English string (msgid) you want to reword.
+#   - Leave msgstr "" (empty) for anything you want to keep unchanged;
+#     pretalx will fall back to the original English string.
+#   - After editing, compile with:
+#       django-admin compilemessages -l en_Rex
+#
+# This file only contains a starter set of common CfP/review/submission
+# terms. Extend it with any additional strings you want to override - you
+# can find exact `msgid` strings by running pretalx's makemessages command
+# or by searching the pretalx source for the English text you see in the UI.
+msgid ""
+msgstr ""
+"Project-Id-Version: pretalx-ref-wording 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: en_Rex\n"
+
+# --- Core submission terminology ---
+
+msgid "Proposal"
+msgstr "Output"
+
+msgid "Proposals"
+msgstr "Outputs"
+
+msgid "Submission"
+msgstr "Output"
+
+msgid "Submissions"
+msgstr "Outputs"
+
+msgid "Call for Proposals"
+msgstr "Call for Outputs"
+
+msgid "Call for Papers"
+msgstr "Call for Outputs"
+
+msgid "CfP"
+msgstr "Call for Outputs"
+
+# --- People ---
+
+msgid "Speaker"
+msgstr "Author"
+
+msgid "Speakers"
+msgstr "Authors"
+
+msgid "Reviewer"
+msgstr "Reviewer"
+
+msgid "Reviewers"
+msgstr "Reviewers"
+
+# --- Talk / session terminology (only relevant if your event still shows
+# scheduling-related strings; adjust or remove as needed) ---
+
+msgid "Talk"
+msgstr "Output"
+
+msgid "Talks"
+msgstr "Outputs"
+
+msgid "Session"
+msgstr "Output"
+
+msgid "Sessions"
+msgstr "Outputs"
+
+# --- Review process ---
+
+msgid "Review"
+msgstr "Review"
+
+msgid "Reviews"
+msgstr "Reviews"
+
+msgid "Score"
+msgstr "Score"
