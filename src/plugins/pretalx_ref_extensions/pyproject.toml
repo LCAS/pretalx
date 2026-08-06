@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pretalx-ref-extensions"
+version = "0.1.0"
+description = "Custom API extensions for REF-style pretalx deployments (batch user provisioning, silent speaker/reviewer assignment)."
+readme = "README.rst"
+requires-python = ">=3.10"
+
+[project.entry-points."pretalx.plugin"]
+pretalx_ref_extensions = "pretalx_ref_extensions:PretalxPluginMeta"
