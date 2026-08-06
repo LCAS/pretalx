@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from pretalx.api.auth import UserTokenAuthentication
+from pretalx.api.pagination import PageNumberPagination
+from pretalx.person.models import User
 from pretalx.submission.domain.submission import add_speaker
 
 from .domain import get_or_create_user
@@ -12,6 +14,7 @@ from .serializers import (
     AddSpeakerSilentSerializer,
     TeamAddMemberSerializer,
     UserCreateSerializer,
+    UserListSerializer,
 )
 
 
@@ -25,10 +28,19 @@ def _user_response_data(user, created):
 
 
 class UserCreateView(APIView):
-    """Get-or-create a user by email. Never sends an invitation email."""
+    """List users of an organiser's teams, or get-or-create a user by email
+    (creation never sends an invitation email)."""
 
     authentication_classes = [UserTokenAuthentication]
     permission_classes = [OrganiserTeamManagerPermission]
+    pagination_class = PageNumberPagination
+
+    def get(self, request, **kwargs):
+        users = User.objects.filter(teams__organiser=request.organiser).distinct().order_by("code")
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(users, request, view=self)
+        serializer = UserListSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     def post(self, request, **kwargs):
         serializer = UserCreateSerializer(data=request.data)

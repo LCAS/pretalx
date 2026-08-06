@@ -39,6 +39,9 @@ submission-level endpoint.
     Body: ``{"email": "...", "name": "...", "locale": "..."}`` (``name`` and
     ``locale`` optional). Returns the existing user, or creates one silently.
 
+``GET /api/organisers/<organiser>/plugins/ref-extensions/users/``
+    Paginated list of users who are members of any of the organiser's teams.
+
 ``POST /api/organisers/<organiser>/plugins/ref-extensions/teams/<team_id>/add-member/``
     Body: same as above. Finds-or-creates the user and adds them directly to
     the team's members, without an invite/accept step.

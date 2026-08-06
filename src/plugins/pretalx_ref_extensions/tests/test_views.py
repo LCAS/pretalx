@@ -112,6 +112,36 @@ def test_create_user_rejected_without_can_change_teams(client, event):
         assert not User.objects.filter(email="blocked@example.com").exists()
 
 
+def test_list_users_returns_organiser_team_members(client, event, orga_token, orga_user, team):
+    other_team_user = UserFactory()
+    team.members.add(other_team_user)
+    outsider = UserFactory()
+
+    response = client.get(
+        _users_url(event.organiser),
+        headers={"Authorization": f"Token {orga_token.token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    codes = {entry["code"] for entry in data["results"]}
+    assert orga_user.code in codes
+    assert other_team_user.code in codes
+    assert outsider.code not in codes
+
+
+def test_list_users_rejected_without_can_change_teams(client, event):
+    other_user = UserFactory()
+    token = UserApiTokenFactory(user=other_user, all_events=True)
+
+    response = client.get(
+        _users_url(event.organiser),
+        headers={"Authorization": f"Token {token.token}"},
+    )
+
+    assert response.status_code == 403
+
+
 def test_add_team_member_adds_directly_without_invite(client, event, orga_token, team):
     invite_count = team.invites.count()
 
