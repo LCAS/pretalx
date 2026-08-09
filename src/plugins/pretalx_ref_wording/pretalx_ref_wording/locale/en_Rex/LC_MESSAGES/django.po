@@ -1360,3 +1360,7 @@ msgstr "This person has already been invited to this output."
 
 msgid "Slot count may only be 1 in this event."
 msgstr "Slot count may only be 1 in this review round."
+
+
+msgid "Login with Keycloak"
+msgstr "Login with your UoL credentials"
