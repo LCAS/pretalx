@@ -3,7 +3,7 @@ from rest_framework import serializers
 from pretalx.person.models import User
 
 
-class UserCreateSerializer(serializers.Serializer):
+class UserDataSerializer(serializers.Serializer):
     email = serializers.EmailField()
     name = serializers.CharField(required=False, allow_blank=True, default="")
     locale = serializers.CharField(
@@ -11,11 +11,15 @@ class UserCreateSerializer(serializers.Serializer):
     )
 
 
-class TeamAddMemberSerializer(UserCreateSerializer):
+class UserCreateSerializer(UserDataSerializer):
+    update = serializers.BooleanField(required=False, default=False)
+
+
+class TeamAddMemberSerializer(UserDataSerializer):
     pass
 
 
-class AddSpeakerSilentSerializer(UserCreateSerializer):
+class AddSpeakerSilentSerializer(UserDataSerializer):
     pass
 
 

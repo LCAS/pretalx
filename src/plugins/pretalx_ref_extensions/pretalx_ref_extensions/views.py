@@ -8,7 +8,7 @@ from pretalx.api.pagination import PageNumberPagination
 from pretalx.person.models import User
 from pretalx.submission.domain.submission import add_speaker
 
-from .domain import get_or_create_user
+from .domain import get_or_create_user, update_user_details
 from .permissions import OrganiserTeamManagerPermission, SubmissionUpdatePermission
 from .serializers import (
     AddSpeakerSilentSerializer,
@@ -29,7 +29,8 @@ def _user_response_data(user, created):
 
 class UserCreateView(APIView):
     """List users of an organiser's teams, or get-or-create a user by email
-    (creation never sends an invitation email)."""
+    (creation never sends an invitation email). With ``update: true``, an
+    existing user's name/locale are overwritten with the given non-blank values."""
 
     authentication_classes = [UserTokenAuthentication]
     permission_classes = [OrganiserTeamManagerPermission]
@@ -49,8 +50,18 @@ class UserCreateView(APIView):
         user, created = get_or_create_user(
             email=data["email"], name=data.get("name"), locale=data.get("locale")
         )
+        updated = False
+        if not created and data["update"]:
+            updated = update_user_details(
+                user,
+                name=data.get("name"),
+                locale=data.get("locale"),
+                log_user=request.user,
+            )
+        response_data = _user_response_data(user, created)
+        response_data["updated"] = updated
         return Response(
-            _user_response_data(user, created),
+            response_data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
