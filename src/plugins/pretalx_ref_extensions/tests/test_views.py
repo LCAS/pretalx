@@ -61,7 +61,8 @@ def _add_speaker_silent_url(event, code):
 
 
 def test_create_user_creates_new_user_without_email(client, event, orga_token):
-    queued_before = QueuedMail.objects.count()
+    with scopes_disabled():
+        queued_before = QueuedMail.objects.count()
 
     response = client.post(
         _users_url(event.organiser),
@@ -76,7 +77,7 @@ def test_create_user_creates_new_user_without_email(client, event, orga_token):
     assert data["created"] is True
     with scopes_disabled():
         assert User.objects.filter(email="new.user@example.com").exists()
-    assert QueuedMail.objects.count() == queued_before
+        assert QueuedMail.objects.count() == queued_before
     assert len(mail.outbox) == 0
 
 
@@ -94,6 +95,90 @@ def test_create_user_is_idempotent_for_existing_email(client, event, orga_token)
     data = response.json()
     assert data["created"] is False
     assert data["code"] == existing.code
+
+
+def test_create_user_without_update_leaves_existing_user_untouched(
+    client, event, orga_token
+):
+    existing = UserFactory(email="keep@example.com", name="Old Name", locale="en")
+
+    response = client.post(
+        _users_url(event.organiser),
+        data={"email": "keep@example.com", "name": "New Name", "locale": "de"},
+        content_type="application/json",
+        headers={"Authorization": f"Token {orga_token.token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["updated"] is False
+    existing.refresh_from_db()
+    assert existing.name == "Old Name"
+    assert existing.locale == "en"
+
+
+def test_create_user_with_update_overwrites_existing_details(client, event, orga_token):
+    existing = UserFactory(email="change@example.com", name="Old Name", locale="en")
+
+    response = client.post(
+        _users_url(event.organiser),
+        data={
+            "email": "Change@example.com",
+            "name": "New Name",
+            "locale": "de",
+            "update": True,
+        },
+        content_type="application/json",
+        headers={"Authorization": f"Token {orga_token.token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["created"] is False
+    assert data["updated"] is True
+    assert data["name"] == "New Name"
+    existing.refresh_from_db()
+    assert existing.name == "New Name"
+    assert existing.locale == "de"
+    assert len(mail.outbox) == 0
+
+
+def test_create_user_with_update_ignores_blank_values(client, event, orga_token):
+    existing = UserFactory(email="blank@example.com", name="Old Name", locale="en")
+
+    response = client.post(
+        _users_url(event.organiser),
+        data={"email": "blank@example.com", "name": "  ", "update": True},
+        content_type="application/json",
+        headers={"Authorization": f"Token {orga_token.token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["updated"] is False
+    existing.refresh_from_db()
+    assert existing.name == "Old Name"
+    assert existing.locale == "en"
+
+
+def test_create_user_with_update_rejects_invalid_locale(client, event, orga_token):
+    existing = UserFactory(email="badlocale@example.com", name="Old Name", locale="en")
+
+    response = client.post(
+        _users_url(event.organiser),
+        data={
+            "email": "badlocale@example.com",
+            "name": "New Name",
+            "locale": "xx-invalid",
+            "update": True,
+        },
+        content_type="application/json",
+        headers={"Authorization": f"Token {orga_token.token}"},
+    )
+
+    assert response.status_code == 400
+    assert "locale" in response.json()
+    existing.refresh_from_db()
+    assert existing.name == "Old Name"
+    assert existing.locale == "en"
 
 
 def test_create_user_rejected_without_can_change_teams(client, event):
@@ -158,7 +243,7 @@ def test_add_team_member_adds_directly_without_invite(client, event, orga_token,
     with scopes_disabled():
         assert team.members.filter(email="reviewer@example.com").exists()
         assert team.invites.count() == invite_count
-    assert QueuedMail.objects.count() == 0
+        assert QueuedMail.objects.count() == 0
     assert len(mail.outbox) == 0
 
 
@@ -194,7 +279,7 @@ def test_add_speaker_silent_attaches_speaker_without_email(client, event, orga_t
         submission.refresh_from_db()
         speaker_emails = [s.user.email for s in submission.speakers.all()]
         assert "speaker@example.com" in speaker_emails
-    assert QueuedMail.objects.count() == 0
+        assert QueuedMail.objects.count() == 0
     assert len(mail.outbox) == 0
 
 

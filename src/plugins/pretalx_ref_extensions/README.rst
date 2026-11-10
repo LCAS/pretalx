@@ -36,8 +36,11 @@ organiser-level endpoints), or "Can change submissions" for the
 submission-level endpoint.
 
 ``POST /api/organisers/<organiser>/plugins/ref-extensions/users/``
-    Body: ``{"email": "...", "name": "...", "locale": "..."}`` (``name`` and
-    ``locale`` optional). Returns the existing user, or creates one silently.
+    Body: ``{"email": "...", "name": "...", "locale": "...", "update": false}``
+    (all but ``email`` optional). Returns the existing user, or creates one
+    silently. With ``"update": true``, an existing user's ``name`` and
+    ``locale`` are overwritten with any non-blank values given (logged as a
+    profile update); the response includes ``"updated": true/false``.
 
 ``GET /api/organisers/<organiser>/plugins/ref-extensions/users/``
     Paginated list of users who are members of any of the organiser's teams.
